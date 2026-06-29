@@ -1,0 +1,792 @@
+name: Deploy Backend (Cloud Build → Cloud Run)
+
+on:
+  push:
+    branches: [ main, production ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  ARTIFACT_REPO: ${{ vars.ARTIFACT_REPO || 'gm-services' }}
+  ARTIFACT_LOCATION: ${{ vars.GCP_REGION }}
+
+jobs:
+  meta:
+    name: Prepare metadata (env & tags)
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.determine.outputs.environment }}
+      primary_tag: ${{ steps.determine.outputs.primary_tag }}
+      secondary_tag: ${{ steps.determine.outputs.secondary_tag }}
+      short_sha: ${{ steps.determine.outputs.short_sha }}
+    steps:
+      - name: Determine environment and tags
+        id: determine
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
+          REF="$GITHUB_REF"
+          if [[ "$REF" == refs/tags/* ]]; then
+            ENVIRONMENT="prod"
+            TAG_NAME="${REF#refs/tags/}"
+            PRIMARY_TAG="prod-${TAG_NAME}"
+            SECONDARY_TAG="prod-${SHORT_SHA}"
+          elif [[ "$REF" == "refs/heads/production" ]]; then
+            ENVIRONMENT="prod"
+            PRIMARY_TAG="prod-${SHORT_SHA}"
+            SECONDARY_TAG="prod-latest"
+          else
+            ENVIRONMENT="preview"
+            PRIMARY_TAG="preview-${SHORT_SHA}"
+            SECONDARY_TAG="preview-latest"
+          fi
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "primary_tag=${PRIMARY_TAG}" >> "$GITHUB_OUTPUT"
+          echo "secondary_tag=${SECONDARY_TAG}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+  changes:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+      has_services: ${{ steps.detect.outputs.has_services }}
+      migrations_changed: ${{ steps.detect.outputs.migrations_changed }}
+      gateway_config_changed: ${{ steps.detect.outputs.gateway_config_changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect changed services & migrations
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HEAD_SHA="${{ github.sha }}"
+          BASE_SHA="${{ github.event.before || '' }}"
+
+          # Force full deploy when building a tag (release)
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            services=$(bash scripts/deploy/list-services.sh)
+            echo "Tag build detected (${GITHUB_REF}); forcing full deploy: $services"
+          else
+            export BASE_SHA HEAD_SHA
+            services=$(bash scripts/deploy/detect-changed-services.sh)
+          fi
+
+          echo "Detected services: $services"
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+
+          if [[ -z "$services" || "$services" == "[]" ]]; then
+            echo "has_services=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_services=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Determine diff range for migration detection
+          diff_base="$BASE_SHA"
+          # Handle invalid BASE_SHA (all zeros or empty)
+          if [[ -z "$diff_base" || "$diff_base" == "0000000000000000000000000000000000000000" ]]; then
+            if git rev-parse "${HEAD_SHA}^" >/dev/null 2>&1; then
+              diff_base=$(git rev-parse "${HEAD_SHA}^")
+            else
+              diff_base=""
+            fi
+          fi
+
+          if [[ -n "$diff_base" ]]; then
+            changed_files=$(git diff --name-only "$diff_base" "$HEAD_SHA")
+          else
+            changed_files=$(git ls-tree --full-tree -r --name-only "$HEAD_SHA")
+          fi
+
+          if [[ -n "$changed_files" ]] && echo "$changed_files" | grep -qE '^(schemas/sql/|scripts/(run-migrations\.sh|Dockerfile\.migrate|cloudbuild-migrate\.yaml)|\.gcloud-submit\.sh)'; then
+            echo "migrations_changed=true" >> "$GITHUB_OUTPUT"
+            echo "Detected migration-related changes"
+          else
+            echo "migrations_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No migration-related changes detected"
+          fi
+
+          # Detect API Gateway configuration changes
+          if [[ -n "$changed_files" ]] && echo "$changed_files" | grep -qE '^(deployments/api-gateway/|scripts/gateway/|services/.*/openapi\.yaml)'; then
+            echo "gateway_config_changed=true" >> "$GITHUB_OUTPUT"
+            echo "Detected API Gateway configuration changes"
+          else
+            echo "gateway_config_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No API Gateway configuration changes detected"
+          fi
+
+  validate-modules:
+    name: Validate Go module replace directives
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: ${{ needs.changes.outputs.has_services == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check pkg replace directives
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/check-pkg-replace.sh
+          ./scripts/check-pkg-replace.sh
+
+  build-images:
+    name: Build images (Cloud Build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [meta, changes, validate-modules]
+    if: ${{ needs.changes.outputs.has_services == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: '>= 420.0.0'
+      - name: Create optimized source tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          TARBALL="/tmp/${SERVICE}-source.tar.gz"
+
+          # Detect service type and create appropriate tarball
+          if [[ "$SERVICE" == "browser-exec" ]]; then
+            # Node.js service - only need service directory
+            echo "Creating Node.js service tarball for ${SERVICE}"
+            tar -czf "$TARBALL" services/"${SERVICE}"
+          else
+            # Go service - need go.work + service + pkg + shared schemas/deploy descriptors
+            echo "Creating Go service tarball for ${SERVICE}"
+            # Create tarball for Go service (no scripts/db needed for runtime)
+            echo "Creating tarball for service: ${SERVICE}"
+            tar -czf "$TARBALL" \
+              --exclude='apps' \
+              --exclude='makerkit' \
+              --exclude='gm-mirror' \
+              --exclude='hosting' \
+              --exclude='node_modules' \
+              --exclude='.next' \
+              --exclude='.git' \
+              --exclude='*.log' \
+              --exclude='.firebase' \
+              go.work \
+              services/"${SERVICE}" \
+              pkg \
+              schemas \
+              deployments
+          fi
+
+          TARBALL_SIZE=$(du -sh "$TARBALL" | cut -f1)
+          echo "✅ Tarball created: ${TARBALL_SIZE}"
+          echo "tarball_path=$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Cloud Build submit (primary tag)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          AR_HOST="${ARTIFACT_LOCATION:-asia-northeast1}-docker.pkg.dev"
+          IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/${SERVICE}"
+          PRIMARY_TAG="${{ needs.meta.outputs.primary_tag }}"
+          TARBALL="${{ env.tarball_path }}"
+
+          # Special handling for siterank service (API+Worker split architecture)
+          if [[ "$SERVICE" == "siterank" ]]; then
+            echo "Detected siterank service - building API and Worker images separately"
+
+            # Build API image using Dockerfile.api
+            echo "Building siterank-api image..."
+            API_IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/siterank-api:${PRIMARY_TAG}"
+            API_BUILD=$(gcloud builds submit "$TARBALL" \
+              --project "${PROJECT_ID}" \
+              --config deployments/cloudbuild/build-service-docker.yaml \
+              --gcs-log-dir gs://gm-build-logs-asia-northeast1/logs \
+              --substitutions _SERVICE="${SERVICE}",_IMAGE="${API_IMAGE}",_DOCKERFILE="Dockerfile.api" \
+              --async --format='value(name)' || true)
+            echo "API Build ID: ${API_BUILD##*/}"
+
+            # Build Worker image using Dockerfile.worker
+            echo "Building siterank-worker image..."
+            WORKER_IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/siterank-worker:${PRIMARY_TAG}"
+            WORKER_BUILD=$(gcloud builds submit "$TARBALL" \
+              --project "${PROJECT_ID}" \
+              --config deployments/cloudbuild/build-service-docker.yaml \
+              --gcs-log-dir gs://gm-build-logs-asia-northeast1/logs \
+              --substitutions _SERVICE="${SERVICE}",_IMAGE="${WORKER_IMAGE}",_DOCKERFILE="Dockerfile.worker" \
+              --async --format='value(name)' || true)
+            echo "Worker Build ID: ${WORKER_BUILD##*/}"
+
+            # Wait for both builds
+            BUILD_NAME="$API_BUILD"  # Monitor API build as primary
+          else
+            echo "Submitting Cloud Build for ${IMAGE}:${PRIMARY_TAG} via config (service=${SERVICE})"
+            BUILD_NAME=$(gcloud builds submit "$TARBALL" \
+              --project "${PROJECT_ID}" \
+              --config deployments/cloudbuild/build-service-docker.yaml \
+              --gcs-log-dir gs://gm-build-logs-asia-northeast1/logs \
+              --substitutions _SERVICE="${SERVICE}",_IMAGE="${IMAGE}:${PRIMARY_TAG}" \
+              --async --format='value(name)' || true)
+          fi
+          BUILD_ID="${BUILD_NAME##*/}"
+          if [[ -z "$BUILD_ID" ]]; then
+            echo "ERROR: Failed to parse Cloud Build ID from submit output" >&2
+            exit 1
+          fi
+          echo "Cloud Build ID: $BUILD_ID"
+          ATTEMPTS=0
+          while :; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --project "$PROJECT_ID" --format='value(status)' || true)
+            echo "Build $BUILD_ID status: $STATUS"
+            case "$STATUS" in
+              SUCCESS) break;;
+              FAILURE|CANCELLED|TIMEOUT|EXPIRED)
+                echo "Cloud Build failed with status: $STATUS (ID: $BUILD_ID)" >&2
+                echo "View logs: https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=$(gcloud config get-value core/project)" >&2
+                exit 1;;
+              *) :;;
+            esac
+            ATTEMPTS=$((ATTEMPTS+1))
+            if [[ $ATTEMPTS -gt 180 ]]; then
+              echo "ERROR: Timed out waiting for Cloud Build (30m)" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+  tag-images:
+    name: Tag images (secondary)
+    runs-on: ubuntu-latest
+    needs: [meta, changes, build-images]
+    if: ${{ needs.changes.outputs.has_services == 'true' && needs.meta.outputs.secondary_tag != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Add secondary tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          AR_HOST="${ARTIFACT_LOCATION:-asia-northeast1}-docker.pkg.dev"
+          PRIMARY_TAG="${{ needs.meta.outputs.primary_tag }}"
+          SECONDARY_TAG="${{ needs.meta.outputs.secondary_tag }}"
+
+          # Special handling for siterank service (API+Worker split architecture)
+          if [[ "$SERVICE" == "siterank" ]]; then
+            echo "Detected siterank service - tagging API and Worker images separately"
+
+            # Tag API image (with retry for race condition)
+            API_IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/siterank-api"
+            echo "Tagging ${API_IMAGE}:${PRIMARY_TAG} -> ${API_IMAGE}:${SECONDARY_TAG}"
+            for i in {1..5}; do
+              if gcloud container images add-tag "${API_IMAGE}:${PRIMARY_TAG}" "${API_IMAGE}:${SECONDARY_TAG}" --quiet --project "${PROJECT_ID}"; then
+                echo "API image tagged successfully"
+                break
+              fi
+              echo "Retry $i/5: Waiting for API image to be available..."
+              sleep $((i * 2))
+            done
+
+            # Tag Worker image (with retry for race condition)
+            WORKER_IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/siterank-worker"
+            echo "Tagging ${WORKER_IMAGE}:${PRIMARY_TAG} -> ${WORKER_IMAGE}:${SECONDARY_TAG}"
+            for i in {1..5}; do
+              if gcloud container images add-tag "${WORKER_IMAGE}:${PRIMARY_TAG}" "${WORKER_IMAGE}:${SECONDARY_TAG}" --quiet --project "${PROJECT_ID}"; then
+                echo "Worker image tagged successfully"
+                break
+              fi
+              echo "Retry $i/5: Waiting for Worker image to be available..."
+              sleep $((i * 2))
+            done
+          else
+            # Standard tagging for other services
+            IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/${SERVICE}"
+            echo "Tagging ${IMAGE}:${PRIMARY_TAG} -> ${IMAGE}:${SECONDARY_TAG}"
+            gcloud container images add-tag "${IMAGE}:${PRIMARY_TAG}" "${IMAGE}:${SECONDARY_TAG}" --quiet --project "${PROJECT_ID}"
+          fi
+
+  db-migrate:
+    name: DB Migrate (AI migrations)
+    runs-on: ubuntu-latest
+    needs: [meta, changes, tag-images]
+    steps:
+      - name: Skip migration (not needed)
+        if: ${{ needs.changes.outputs.migrations_changed != 'true' }}
+        run: echo "No migration-related changes detected; skipping Cloud Build migration job."
+      - name: Checkout
+        if: ${{ needs.changes.outputs.migrations_changed == 'true' }}
+        uses: actions/checkout@v4
+      - name: Auth to Google Cloud
+        if: ${{ needs.changes.outputs.migrations_changed == 'true' }}
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        if: ${{ needs.changes.outputs.migrations_changed == 'true' }}
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Execute targeted migrations
+        if: ${{ needs.changes.outputs.migrations_changed == 'true' }}
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud config set project "${PROJECT_ID}"
+          bash .gcloud-submit.sh migrate
+
+  deploy-services:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: [meta, changes, tag-images, db-migrate]
+    if: ${{ needs.changes.outputs.has_services == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Deploy service
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE="${{ matrix.service }}"
+          ENVIRONMENT="${{ needs.meta.outputs.environment }}"
+          AR_HOST="${ARTIFACT_LOCATION:-asia-northeast1}-docker.pkg.dev"
+          IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/${SERVICE}:${{ needs.meta.outputs.primary_tag }}"
+
+          # Determine target service name based on environment
+          # All services use environment suffix: {service}-preview for preview, {service} for prod
+          if [[ "$ENVIRONMENT" == "preview" ]]; then
+            TARGET_SERVICE="${SERVICE}-preview"
+          else
+            TARGET_SERVICE="${SERVICE}"
+          fi
+
+          echo "Deploying ${TARGET_SERVICE} (${ENVIRONMENT}) with image ${IMAGE} to ${REGION}"
+
+          # Determine if service needs VPC connector for Cloud SQL/Redis access
+          # Services using DATABASE_URL/REDIS_URL: billing, useractivity, siterank, adscenter, projector, recommendations, gateway-middleware
+          VPC_FLAGS=""
+          case "$SERVICE" in
+            billing|useractivity|siterank|adscenter|projector|recommendations|gateway-middleware)
+              echo "Service ${SERVICE} requires database access - adding Cloud SQL Proxy"
+              CLOUDSQL_FLAGS="--set-cloudsql-instances=${GCP_PROJECT_ID}:asia-northeast1:gm"
+              DB_ENV_VARS="DB_CONNECTION_MODE=cloudsql"
+              ;;
+            *)
+              echo "Service ${SERVICE} does not require database access"
+              CLOUDSQL_FLAGS=""
+              DB_ENV_VARS=""
+              ;;
+          esac
+
+          # Special configuration for browser-exec (Playwright service)
+          if [[ "$SERVICE" == "browser-exec" ]]; then
+            echo "Deploying browser-exec with split architecture: API + Worker"
+
+            # 1. Deploy API instance (接收请求，发布到队列)
+            echo "Deploying ${TARGET_SERVICE} (API instance)"
+            gcloud run deploy "${TARGET_SERVICE}" \
+              --image "${IMAGE}" \
+              --region "${REGION:-asia-northeast1}" \
+              --platform managed \
+              --allow-unauthenticated \
+              --project "${PROJECT_ID}" \
+              --memory 1Gi \
+              --cpu 1 \
+              --concurrency 10 \
+              --max-instances 5 \
+              --min-instances 1 \
+              --timeout 60s \
+              --execution-environment gen2 \
+              --set-env-vars "PLAYWRIGHT=1,ENABLE_QUEUE_WORKER=0,BROWSER_MAX_CONCURRENCY=4,BROWSER_MAX_CONTEXTS=12,BROWSER_MAX_MEMORY_MB=1536,NODE_ENV=production"
+
+            # 2. Deploy Worker instance (消费队列，处理浏览器任务)
+            echo "Deploying ${TARGET_SERVICE}-worker (Worker instance)"
+            gcloud run deploy "${TARGET_SERVICE}-worker" \
+              --image "${IMAGE}" \
+              --region "${REGION:-asia-northeast1}" \
+              --platform managed \
+              --no-allow-unauthenticated \
+              --project "${PROJECT_ID}" \
+              --memory 2Gi \
+              --cpu 2 \
+              --concurrency 1 \
+              --max-instances 20 \
+              --min-instances 5 \
+              --timeout 600s \
+              --execution-environment gen2 \
+              --set-env-vars "PLAYWRIGHT=1,ENABLE_QUEUE_WORKER=1,BROWSER_MAX_CONCURRENCY=10,BROWSER_MAX_CONTEXTS=20,BROWSER_MAX_MEMORY_MB=1536,NODE_ENV=production"
+          elif [[ "$SERVICE" == "siterank" ]]; then
+            echo "Deploying siterank with split architecture: API + Worker"
+
+            # Determine API and Worker service names based on environment
+            if [[ "$ENVIRONMENT" == "preview" ]]; then
+              API_SERVICE="siterank-api-preview"
+              WORKER_SERVICE="siterank-worker-preview"
+            else
+              API_SERVICE="siterank-api"
+              WORKER_SERVICE="siterank-worker"
+            fi
+
+            # 1. Deploy API instance (HTTP API only)
+            API_IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/siterank-api:${{ needs.meta.outputs.primary_tag }}"
+            echo "Deploying ${API_SERVICE} with image ${API_IMAGE}"
+            gcloud run deploy "${API_SERVICE}" \
+              --image "${API_IMAGE}" \
+              --region "${REGION:-asia-northeast1}" \
+              --platform managed \
+              --allow-unauthenticated \
+              --project "${PROJECT_ID}" \
+              --memory 512Mi \
+              --cpu 1 \
+              --concurrency 80 \
+              --max-instances 10 \
+              --min-instances 1 \
+              --timeout 60s \
+              --execution-environment gen2 \
+              --set-cloudsql-instances=${GCP_PROJECT_ID}:asia-northeast1:gm \
+              --set-env-vars "ENV=${ENVIRONMENT},LOG_LEVEL=info,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},STACK=${ENVIRONMENT},DB_CONNECTION_MODE=cloudsql" \
+              --set-secrets "DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,VALKEY_URL=VALKEY_URL:latest"
+
+            # 2. Deploy Worker instance (Pub/Sub consumer)
+            WORKER_IMAGE="${AR_HOST}/${PROJECT_ID}/${ARTIFACT_REPO}/siterank-worker:${{ needs.meta.outputs.primary_tag }}"
+            echo "Deploying ${WORKER_SERVICE} with image ${WORKER_IMAGE}"
+            gcloud run deploy "${WORKER_SERVICE}" \
+              --image "${WORKER_IMAGE}" \
+              --region "${REGION:-asia-northeast1}" \
+              --platform managed \
+              --no-allow-unauthenticated \
+              --project "${PROJECT_ID}" \
+              --memory 1Gi \
+              --cpu 1 \
+              --concurrency 1 \
+              --max-instances 20 \
+              --min-instances 1 \
+              --timeout 600s \
+              --execution-environment gen2 \
+              --set-cloudsql-instances=${GCP_PROJECT_ID}:asia-northeast1:gm \
+              --set-env-vars "ENV=${ENVIRONMENT},LOG_LEVEL=info,PUBSUB_SUBSCRIPTION=evaluation-tasks-sub,PROJECT_ID=${PROJECT_ID},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},STACK=${ENVIRONMENT},DB_CONNECTION_MODE=cloudsql" \
+              --set-secrets "DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,VALKEY_URL=VALKEY_URL:latest"
+          elif [[ "$SERVICE" == "gateway-middleware" ]]; then
+            echo "Deploying gateway-middleware (API Gateway with middleware pipeline)"
+
+            # Determine Billing service URL based on environment
+            if [[ "$ENVIRONMENT" == "preview" ]]; then
+              BILLING_URL="https://billing-preview-yt54xvsg5q-an.a.run.app"
+            else
+              BILLING_URL="https://billing-vtqnpslota-an.a.run.app"
+            fi
+
+            gcloud run deploy "${TARGET_SERVICE}" \
+              --image "${IMAGE}" \
+              --region "${REGION:-asia-northeast1}" \
+              --platform managed \
+              --allow-unauthenticated \
+              --project "${PROJECT_ID}" \
+              --memory 512Mi \
+              --cpu 1 \
+              --concurrency 80 \
+              --max-instances 10 \
+              --min-instances 1 \
+              --timeout 60s \
+              --execution-environment gen2 \
+              --set-cloudsql-instances=${GCP_PROJECT_ID}:asia-northeast1:gm \
+              --set-env-vars "ENV=${ENVIRONMENT},GIN_MODE=release,CONFIG_PATH=/config/routes.yaml,BILLING_SERVICE_URL=${BILLING_URL},LOG_LEVEL=info,DB_CONNECTION_MODE=cloudsql" \
+              --set-secrets "DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest"
+          else
+            # Standard deployment for other services (with Cloud SQL Proxy if needed)
+            ENV_VARS_CMD=""
+            if [[ -n "$DB_ENV_VARS" ]]; then
+              ENV_VARS_CMD="--update-env-vars ${DB_ENV_VARS}"
+            fi
+
+            gcloud run deploy "${TARGET_SERVICE}" \
+              --image "${IMAGE}" \
+              --region "${REGION:-asia-northeast1}" \
+              --platform managed \
+              --allow-unauthenticated \
+              --project "${PROJECT_ID}" \
+              ${CLOUDSQL_FLAGS} \
+              ${ENV_VARS_CMD}
+          fi
+
+  service-smoke:
+    name: Service Smoke Checks
+    runs-on: ubuntu-latest
+    needs: [deploy-services, meta, changes]
+    if: ${{ needs.changes.outputs.has_services == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Run service smoke check
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          ENVIRONMENT: ${{ needs.meta.outputs.environment }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/deploy/smoke-service.sh "${{ matrix.service }}" "${ENVIRONMENT}"
+
+  sync-api-gateway:
+    name: Sync API Gateway (Auto-merge OpenAPI)
+    runs-on: ubuntu-latest
+    needs: [meta, changes, deploy-services, service-smoke]
+    # Execute if either services were deployed OR gateway config changed
+    # Use always() to run even if deploy-services was skipped (when only gateway config changed)
+    if: |
+      always() &&
+      !failure() &&
+      !cancelled() &&
+      (needs.changes.outputs.has_services == 'true' || needs.changes.outputs.gateway_config_changed == 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-yaml jq
+      - name: Merge service OpenAPI specs
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          ENV: ${{ needs.meta.outputs.environment }}
+          USE_GATEWAY_MIDDLEWARE: "true"  # ✅ JWT验证已修复，启用统一中间件
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/gateway/merge-openapi.sh out/gateway-merged.yaml
+      - name: Create API Config
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          ENVIRONMENT: ${{ needs.meta.outputs.environment }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_ID=$([[ "$ENVIRONMENT" == "preview" ]] && echo "gm-api-preview" || echo "gm-api")
+          CONFIG_ID="${API_ID}-config-$(date +%Y%m%d-%H%M%S)"
+
+          echo "Creating API Config: ${CONFIG_ID} for API: ${API_ID}"
+          gcloud api-gateway api-configs create "$CONFIG_ID" \
+            --api="$API_ID" \
+            --openapi-spec="out/gateway-merged.yaml" \
+            --project="$PROJECT_ID" \
+            --display-name="Auto-sync from deploy-backend (SHA: ${{ needs.meta.outputs.short_sha }})"
+      - name: Update Gateway
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          ENVIRONMENT: ${{ needs.meta.outputs.environment }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_ID=$([[ "$ENVIRONMENT" == "preview" ]] && echo "gm-api-preview" || echo "gm-api")
+          GATEWAY_ID=$([[ "$ENVIRONMENT" == "preview" ]] && echo "gm-gw-preview" || echo "gm-gw")
+
+          # Get latest config ID (sorted by name which includes timestamp)
+          CONFIG_ID=$(gcloud api-gateway api-configs list \
+            --api="$API_ID" \
+            --project="$PROJECT_ID" \
+            --format='value(name)' | sort -r | head -1)
+
+          echo "Updating Gateway: ${GATEWAY_ID} with config: ${CONFIG_ID}"
+          gcloud api-gateway gateways update "$GATEWAY_ID" \
+            --api="$API_ID" \
+            --api-config="$CONFIG_ID" \
+            --location="${REGION:-asia-northeast1}" \
+            --project="$PROJECT_ID"
+
+          # Get Gateway URL
+          GATEWAY_URL=$(gcloud api-gateway gateways describe "$GATEWAY_ID" \
+            --location="${REGION:-asia-northeast1}" \
+            --project="$PROJECT_ID" \
+            --format='value(defaultHostname)')
+
+          echo "✅ API Gateway synced successfully!"
+          echo "🌐 Gateway URL: https://$GATEWAY_URL"
+
+  gateway-smoke:
+    name: Gateway Smoke (health without auth)
+    runs-on: ubuntu-latest
+    needs: [meta, changes, sync-api-gateway]
+    # Run if gateway was synced (either from service deploy or config change)
+    if: |
+      always() &&
+      !failure() &&
+      !cancelled() &&
+      needs.sync-api-gateway.result == 'success' &&
+      needs.meta.outputs.environment != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Resolve Gateway Host
+        id: gw
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GATEWAY_ID=$([[ "${{ needs.meta.outputs.environment }}" == "preview" ]] && echo gm-gw-preview || echo gm-gw)
+          host=$(gcloud api-gateway gateways describe "$GATEWAY_ID" --location "${REGION:-asia-northeast1}" --project "$PROJECT_ID" --format='value(defaultHostname)')
+          echo "host=${host}" >> "$GITHUB_OUTPUT"
+          echo "Gateway: https://${host}"
+      - name: Health checks
+        env:
+          HOST: ${{ steps.gw.outputs.host }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sf "https://${HOST}/api/health" >/dev/null
+          curl -sf "https://${HOST}/api/health/console" >/dev/null
+          curl -sf "https://${HOST}/api/health/adscenter" >/dev/null
+          curl -sf "https://${HOST}/api/health/billing" >/dev/null || echo "[warn] /api/health/billing not wired at gateway yet"
+          echo "Gateway health OK"
+
+  e2e-settings:
+    name: E2E (Settings via API Gateway)
+    runs-on: ubuntu-latest
+    needs: [deploy-services, meta]
+    if: ${{ needs.meta.outputs.environment == 'preview' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+      - name: Resolve Gateway Host
+        id: gw
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          GATEWAY_ID="gm-gw-preview"
+          host=$(gcloud api-gateway gateways describe "$GATEWAY_ID" --location "${REGION:-asia-northeast1}" --project "$PROJECT_ID" --format='value(defaultHostname)')
+          echo "host=${host}" >> "$GITHUB_OUTPUT"
+          echo "Gateway: https://${host}"
+      - name: Run settings E2E
+        env:
+          HOST: ${{ steps.gw.outputs.host }}
+          AUTH: ${{ secrets.PREVIEW_TEST_ID_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AUTH:-}" ]]; then
+            echo "[warn] PREVIEW_TEST_ID_TOKEN not set; skipping E2E";
+            exit 0
+          fi
+          sudo apt-get update >/dev/null 2>&1 || true
+          sudo apt-get install -y jq >/dev/null 2>&1 || true
+          bash scripts/ops/e2e-settings.sh
+
+  deployment-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [meta, changes, service-smoke]
+    if: ${{ needs.changes.outputs.has_services == 'true' }}
+    steps:
+      - name: Generate summary
+        shell: bash
+        env:
+          SERVICES_JSON: ${{ needs.changes.outputs.services }}
+          ENVIRONMENT: ${{ needs.meta.outputs.environment }}
+          PRIMARY_TAG: ${{ needs.meta.outputs.primary_tag }}
+          SECONDARY_TAG: ${{ needs.meta.outputs.secondary_tag }}
+          SHORT_SHA: ${{ needs.meta.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y jq >/dev/null 2>&1
+          echo "${SERVICES_JSON}" | jq -r '.[]' > services.txt
+          echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "* Environment: ${ENVIRONMENT}" >> $GITHUB_STEP_SUMMARY
+          echo "* Primary Tag: ${PRIMARY_TAG}" >> $GITHUB_STEP_SUMMARY
+          if [[ -n "${SECONDARY_TAG}" ]]; then
+            echo "* Secondary Tag: ${SECONDARY_TAG}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "* Commit: ${SHORT_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Services" >> $GITHUB_STEP_SUMMARY
+          while IFS= read -r svc; do
+            echo "- ${svc}" >> $GITHUB_STEP_SUMMARY
+          done < services.txt
+          services_json=$(echo "${SERVICES_JSON}" | jq '.')
+          cat <<EOF > deploy-summary.json
+          {
+            "environment": "${ENVIRONMENT}",
+            "primary_tag": "${PRIMARY_TAG}",
+            "secondary_tag": "${SECONDARY_TAG}",
+            "commit": "${SHORT_SHA}",
+            "services": ${services_json}
+          }
+          EOF
+      - name: Upload deployment summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-summary-${{ needs.meta.outputs.short_sha }}
+          path: deploy-summary.json

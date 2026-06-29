@@ -1,0 +1,365 @@
+name: Database Migration (DEPRECATED - Use database-migration-cloudrun.yml)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (DEPRECATED - Use database-migration-cloudrun.yml instead)'
+        required: true
+        type: choice
+        options:
+          - preview
+          - production
+        default: 'preview'
+      dry_run:
+        description: 'Dry run (no actual changes)'
+        required: false
+        type: boolean
+        default: false
+  # DEPRECATED: Push trigger removed
+  # This workflow uses GitHub Actions Runner + Cloud SQL Proxy (TCP connection)
+  # which does not follow the architecture requirement of Cloud Run Job + Unix Socket
+  # Use database-migration-cloudrun.yml instead
+
+env:
+  PROJECT_ID: ${GCP_PROJECT_ID}
+  REGION: asia-northeast1
+  CLOUDSQL_INSTANCE: gm
+  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+
+jobs:
+  validate-migrations:
+    name: Validate Migration Files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify migration files
+        run: |
+          echo "🔍 Verifying migration files..."
+          chmod +x scripts/db/verify-migration-files.sh
+          ./scripts/db/verify-migration-files.sh
+
+      - name: Check for table reference issues
+        run: |
+          echo "🔍 Checking for table reference issues..."
+          chmod +x scripts/db/find-table-references.sh
+          ./scripts/db/find-table-references.sh || true
+
+  migrate-billing:
+    name: Migrate Billing Service
+    needs: validate-migrations
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.dry_run }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+          migrate -version
+
+      - name: Download Cloud SQL Proxy
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+
+      - name: Start Cloud SQL Proxy
+        run: |
+          ./cloud_sql_proxy -instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }}=tcp:5432 &
+          sleep 5
+
+      - name: Get database URL
+        id: db-url
+        run: |
+          # 从GCP Secret Manager获取DATABASE_URL
+          DB_URL=$(gcloud secrets versions access latest --secret="DATABASE_URL")
+          echo "::add-mask::$DB_URL"
+          # 将Unix Socket路径替换为localhost:5432（因为Cloud SQL Proxy在本地运行）
+          DB_URL_LOCAL=$(echo "$DB_URL" | sed 's|/cloudsql/[^/]*/[^/]*/[^/]*|localhost:5432|g')
+          echo "db_url=$DB_URL_LOCAL" >> $GITHUB_OUTPUT
+
+      - name: Run billing migrations
+        run: |
+          echo "📦 Running billing service migrations..."
+          migrate -path services/billing/migrations \
+                  -database "${{ steps.db-url.outputs.db_url }}" \
+                  up
+
+      - name: Verify billing schema
+        run: |
+          echo "✅ Verifying billing schema..."
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dt billing.*"
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dt useractivity.*"
+
+  migrate-adscenter:
+    name: Migrate Adscenter Service
+    needs: migrate-billing
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.dry_run }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+
+      - name: Download Cloud SQL Proxy
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+
+      - name: Start Cloud SQL Proxy
+        run: |
+          ./cloud_sql_proxy -instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }}=tcp:5432 &
+          sleep 5
+
+      - name: Get database URL
+        id: db-url
+        run: |
+          DB_URL=$(gcloud secrets versions access latest --secret="DATABASE_URL")
+          echo "::add-mask::$DB_URL"
+          DB_URL_LOCAL=$(echo "$DB_URL" | sed 's|/cloudsql/[^/]*/[^/]*/[^/]*|localhost:5432|g')
+          echo "db_url=$DB_URL_LOCAL" >> $GITHUB_OUTPUT
+
+      - name: Run adscenter migrations
+        run: |
+          echo "📦 Running adscenter service migrations..."
+          migrate -path services/adscenter/migrations \
+                  -database "${{ steps.db-url.outputs.db_url }}" \
+                  up
+
+      - name: Verify adscenter schema
+        run: |
+          echo "✅ Verifying adscenter schema..."
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dt adscenter.*"
+
+  migrate-offer:
+    name: Migrate Offer Service
+    needs: migrate-billing
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.dry_run }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+
+      - name: Download Cloud SQL Proxy
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+
+      - name: Start Cloud SQL Proxy
+        run: |
+          ./cloud_sql_proxy -instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }}=tcp:5432 &
+          sleep 5
+
+      - name: Get database URL
+        id: db-url
+        run: |
+          DB_URL=$(gcloud secrets versions access latest --secret="DATABASE_URL")
+          echo "::add-mask::$DB_URL"
+          DB_URL_LOCAL=$(echo "$DB_URL" | sed 's|/cloudsql/[^/]*/[^/]*/[^/]*|localhost:5432|g')
+          echo "db_url=$DB_URL_LOCAL" >> $GITHUB_OUTPUT
+
+      - name: Run offer migrations
+        run: |
+          echo "📦 Running offer service migrations..."
+          migrate -path services/offer/migrations \
+                  -database "${{ steps.db-url.outputs.db_url }}" \
+                  up
+
+      - name: Verify offer schema
+        run: |
+          echo "✅ Verifying offer schema..."
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dt offers.*"
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dt siterank.*"
+
+  migrate-console:
+    name: Migrate Console Service
+    needs: [migrate-billing, migrate-adscenter, migrate-offer]
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.dry_run }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Install golang-migrate
+        run: |
+          curl -L https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz | tar xvz
+          sudo mv migrate /usr/local/bin/
+
+      - name: Download Cloud SQL Proxy
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+
+      - name: Start Cloud SQL Proxy
+        run: |
+          ./cloud_sql_proxy -instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }}=tcp:5432 &
+          sleep 5
+
+      - name: Get database URL
+        id: db-url
+        run: |
+          DB_URL=$(gcloud secrets versions access latest --secret="DATABASE_URL")
+          echo "::add-mask::$DB_URL"
+          DB_URL_LOCAL=$(echo "$DB_URL" | sed 's|/cloudsql/[^/]*/[^/]*/[^/]*|localhost:5432|g')
+          echo "db_url=$DB_URL_LOCAL" >> $GITHUB_OUTPUT
+
+      - name: Run console migrations
+        run: |
+          echo "📦 Running console service migrations..."
+          migrate -path services/console/migrations \
+                  -database "${{ steps.db-url.outputs.db_url }}" \
+                  up
+
+      - name: Verify console schema
+        run: |
+          echo "✅ Verifying console schema..."
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dt public.*"
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dt system.*"
+
+  verify-all-schemas:
+    name: Verify All Schemas
+    needs: [migrate-billing, migrate-adscenter, migrate-offer, migrate-console]
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.dry_run }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Download Cloud SQL Proxy
+        run: |
+          wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 -O cloud_sql_proxy
+          chmod +x cloud_sql_proxy
+
+      - name: Start Cloud SQL Proxy
+        run: |
+          ./cloud_sql_proxy -instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }}=tcp:5432 &
+          sleep 5
+
+      - name: Get database URL
+        id: db-url
+        run: |
+          DB_URL=$(gcloud secrets versions access latest --secret="DATABASE_URL")
+          echo "::add-mask::$DB_URL"
+          DB_URL_LOCAL=$(echo "$DB_URL" | sed 's|/cloudsql/[^/]*/[^/]*/[^/]*|localhost:5432|g')
+          echo "db_url=$DB_URL_LOCAL" >> $GITHUB_OUTPUT
+
+      - name: List all schemas
+        run: |
+          echo "📋 Listing all schemas..."
+          psql "${{ steps.db-url.outputs.db_url }}" -c "\dn+"
+
+      - name: List all tables
+        run: |
+          echo "📋 Listing all tables..."
+          psql "${{ steps.db-url.outputs.db_url }}" -c "
+            SELECT schemaname, tablename 
+            FROM pg_tables 
+            WHERE schemaname IN ('billing', 'useractivity', 'offers', 'siterank', 'adscenter', 'system', 'public')
+            ORDER BY schemaname, tablename;
+          "
+
+      - name: Count tables by schema
+        run: |
+          echo "📊 Counting tables by schema..."
+          psql "${{ steps.db-url.outputs.db_url }}" -c "
+            SELECT schemaname, COUNT(*) as table_count
+            FROM pg_tables 
+            WHERE schemaname IN ('billing', 'useractivity', 'offers', 'siterank', 'adscenter', 'system', 'public')
+            GROUP BY schemaname
+            ORDER BY schemaname;
+          "
+
+      - name: Generate migration report
+        run: |
+          echo "📝 Generating migration report..."
+          cat > migration-report.md << 'EOF'
+          # Database Migration Report
+          
+          **Date**: $(date '+%Y-%m-%d %H:%M:%S')
+          **Environment**: ${{ inputs.environment || 'preview' }}
+          **Triggered by**: ${{ github.actor }}
+          **Commit**: ${{ github.sha }}
+          
+          ## Migration Summary
+          
+          - ✅ Billing service migrations completed
+          - ✅ Adscenter service migrations completed
+          - ✅ Offer service migrations completed
+          - ✅ Console service migrations completed
+          
+          ## Schema Verification
+          
+          All schemas have been verified and are operational.
+          
+          ## Next Steps
+          
+          1. Monitor service logs for any database connection issues
+          2. Run end-to-end tests to verify functionality
+          3. Monitor performance metrics
+          
+          EOF
+          cat migration-report.md
+
+      - name: Upload migration report
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-report
+          path: migration-report.md
+
+  notify-completion:
+    name: Notify Completion
+    needs: verify-all-schemas
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check migration status
+        run: |
+          if [ "${{ needs.verify-all-schemas.result }}" == "success" ]; then
+            echo "✅ All migrations completed successfully!"
+          else
+            echo "❌ Migration failed. Please check the logs."
+            exit 1
+          fi

@@ -1,0 +1,53 @@
+# Trial Subscriptions Data Migration Build Configuration
+# Executes trial subscriptions data migration from useractivity to billing
+
+steps:
+  # Build the billing service migrator image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/billing-migrator:$BUILD_ID'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/billing-migrator:latest'
+      - '-f'
+      - 'Dockerfile.migrator'
+      - '.'
+
+  # Execute trial subscriptions migration
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'execute'
+      - 'billing-trial-migrator-$BUILD_ID'
+      - '--region=asia-east1'
+      - '--image=gcr.io/$PROJECT_ID/billing-migrator:$BUILD_ID'
+      - '--set-env-vars=DATABASE_URL=$$DATABASE_URL'
+      - '--set-env-vars=TRIAL_MIGRATION=true'
+      - '--set-env-vars=PROJECT_ID=$PROJECT_ID'
+      - '--set-secrets=DATABASE_URL=billing-db-url:latest'
+      - '--task-timeout=3600s'
+      - '--memory=1Gi'
+      - '--cpu=1'
+    secretEnv:
+      - 'DATABASE_URL'
+
+# Images to push to the registry
+images:
+  - 'gcr.io/$PROJECT_ID/billing-migrator:$BUILD_ID'
+  - 'gcr.io/$PROJECT_ID/billing-migrator:latest'
+
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+substitutions:
+  _REGION: 'asia-east1'
+
+tags:
+  - 'billing'
+  - 'migration'
+  - 'trial-subscriptions'

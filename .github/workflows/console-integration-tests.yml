@@ -1,0 +1,160 @@
+name: Console Cloud SQL Integration Tests
+
+on:
+  # Run on push to main (after PR merge)
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/console/**'
+      - 'deployments/cloudbuild/build-console-test-job.yaml'
+      - 'deployments/cloud-run-jobs/console-integration-tests.yaml'
+
+  # Run on PR to main
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'services/console/**'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  integration-tests:
+    name: Run Cloud SQL Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${GCP_PROJECT_ID}
+
+      - name: Create optimized source tarball
+        run: |
+          echo "Creating optimized tarball (following monorepo best practices)..."
+          tar -czf /tmp/console-test-source.tar.gz \
+            --exclude='apps' \
+            --exclude='makerkit' \
+            --exclude='docs' \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            --exclude='.next' \
+            go.work go.work.sum \
+            services/console \
+            pkg
+
+          TARBALL_SIZE=$(du -h /tmp/console-test-source.tar.gz | cut -f1)
+          echo "Tarball size: $TARBALL_SIZE"
+
+      - name: Build test image
+        run: |
+          echo "Building integration test image..."
+          gcloud builds submit /tmp/console-test-source.tar.gz \
+            --config=deployments/cloudbuild/build-console-test-job.yaml \
+            --project=${GCP_PROJECT_ID} \
+            --substitutions=_IMAGE="asia-northeast1-docker.pkg.dev/${GCP_PROJECT_ID}/gm-services/console-integration-tests:${{ github.sha }}"
+
+      - name: Check if Cloud Run Job exists
+        id: check-job
+        run: |
+          JOB_EXISTS=$(gcloud run jobs describe console-integration-tests \
+            --region=asia-northeast1 \
+            --project=${GCP_PROJECT_ID} \
+            --format="value(name)" 2>/dev/null || echo "")
+
+          if [ -z "$JOB_EXISTS" ]; then
+            echo "exists=false" >> $GITHUB_OUTPUT
+          else
+            echo "exists=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Cloud Run Job (if not exists)
+        if: steps.check-job.outputs.exists == 'false'
+        run: |
+          echo "Creating new Cloud Run Job..."
+          gcloud run jobs create console-integration-tests \
+            --image="asia-northeast1-docker.pkg.dev/${GCP_PROJECT_ID}/gm-services/console-integration-tests:${{ github.sha }}" \
+            --region=asia-northeast1 \
+            --project=${GCP_PROJECT_ID} \
+            --service-account=codex-dev@${GCP_PROJECT_ID}.iam.gserviceaccount.com \
+            --vpc-connector=projects/${GCP_PROJECT_ID}/locations/asia-northeast1/connectors/cr-conn-default-ane1 \
+            --vpc-egress=all-traffic \
+            --set-env-vars="RUN_CLOUD_SQL_TESTS=true,TEST_ENVIRONMENT=cloud-run-job" \
+            --set-secrets="CLOUDSQL_DATABASE_URL=DATABASE_URL:latest" \
+            --memory=2Gi \
+            --cpu=2 \
+            --max-retries=3 \
+            --task-timeout=10m
+
+      - name: Update Cloud Run Job (if exists)
+        if: steps.check-job.outputs.exists == 'true'
+        run: |
+          echo "Updating existing Cloud Run Job..."
+          gcloud run jobs update console-integration-tests \
+            --image="asia-northeast1-docker.pkg.dev/${GCP_PROJECT_ID}/gm-services/console-integration-tests:${{ github.sha }}" \
+            --region=asia-northeast1 \
+            --project=${GCP_PROJECT_ID}
+
+      - name: Run database migrations
+        run: |
+          echo "Running database migrations before tests..."
+          gcloud run jobs execute db-migrate \
+            --region=asia-northeast1 \
+            --project=${GCP_PROJECT_ID} \
+            --wait
+
+      - name: Execute integration tests
+        id: run-tests
+        run: |
+          echo "Executing Cloud SQL integration tests..."
+          gcloud run jobs execute console-integration-tests \
+            --region=asia-northeast1 \
+            --project=${GCP_PROJECT_ID} \
+            --wait
+
+      - name: Get test execution logs
+        if: always()
+        run: |
+          # Get the latest execution
+          EXECUTION=$(gcloud run jobs executions list \
+            --job=console-integration-tests \
+            --region=asia-northeast1 \
+            --project=${GCP_PROJECT_ID} \
+            --limit=1 \
+            --format="value(name)")
+
+          echo "Fetching logs for execution: $EXECUTION"
+
+          # Get logs
+          gcloud logging read \
+            "resource.type=cloud_run_job AND resource.labels.job_name=console-integration-tests AND resource.labels.location=asia-northeast1" \
+            --limit=200 \
+            --format=json \
+            --project=${GCP_PROJECT_ID}
+
+      - name: Check test results
+        if: steps.run-tests.outcome != 'success'
+        run: |
+          echo "❌ Integration tests failed!"
+          echo "Check the logs above for details"
+          exit 1
+
+      - name: Test success
+        if: steps.run-tests.outcome == 'success'
+        run: |
+          echo "✅ All Cloud SQL integration tests passed!"

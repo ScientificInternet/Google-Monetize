@@ -1,0 +1,42 @@
+# Billing DB Migrator
+# Purpose: Run database migrations independently from service deployment
+# Usage: gcloud run jobs execute billing-db-migrator --region=asia-northeast1
+
+FROM golang:1.25-alpine as builder
+WORKDIR /workspace
+ENV GO111MODULE=on
+ENV GOWORK=off
+
+# Install git for potential private dependencies
+RUN apk add --no-cache git
+
+# Copy minimal workspace (only billing service + migrations)
+COPY go.work ./go.work
+COPY pkg ./pkg
+COPY services/billing ./services/billing
+
+WORKDIR /workspace/services/billing
+
+# Build migration runner
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -tags=migration \
+    -o /run-migrations \
+    ./cmd/migrator
+
+# Runtime stage
+FROM alpine:latest
+WORKDIR /app
+
+# Install PostgreSQL client (for debugging)
+RUN apk add --no-cache postgresql-client
+
+# Copy migrator binary and SQL files
+COPY --from=builder /run-migrations /app/run-migrations
+COPY --from=builder /workspace/services/billing/internal/migrations /app/migrations
+
+# Set environment for Cloud Run Job
+ENV MIGRATIONS_DIR=/app/migrations
+
+CMD ["/app/run-migrations"]

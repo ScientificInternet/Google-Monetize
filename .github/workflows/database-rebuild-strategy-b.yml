@@ -1,0 +1,500 @@
+name: 数据库全量重建 (策略B - 高风险操作)
+
+# 仅支持手动触发，防止意外执行
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '目标环境（仅支持preview）'
+        required: true
+        type: choice
+        options:
+          - preview
+        default: 'preview'
+      confirmation_text:
+        description: '输入 "REBUILD DATABASE" 确认执行'
+        required: true
+        type: string
+      backup_name:
+        description: '备份名称（可选，留空自动生成）'
+        required: false
+        type: string
+      skip_backup:
+        description: '跳过备份（仅用于测试，生产环境禁止）'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PROJECT_ID: ${GCP_PROJECT_ID}
+  REGION: asia-northeast1
+  CLOUDSQL_INSTANCE: gm
+  IMAGE_NAME: asia-northeast1-docker.pkg.dev/${GCP_PROJECT_ID}/gm-services/db-migrator
+  TARGET_ENV: ${{ inputs.environment }}
+
+jobs:
+  # ============================================================================
+  # Job 1: 安全检查和确认
+  # ============================================================================
+  safety-checks:
+    name: 安全检查
+    runs-on: ubuntu-latest
+    steps:
+      - name: 验证确认文本
+        run: |
+          if [ "${{ inputs.confirmation_text }}" != "REBUILD DATABASE" ]; then
+            echo "❌ 确认文本不正确"
+            echo "必须输入: REBUILD DATABASE"
+            echo "实际输入: ${{ inputs.confirmation_text }}"
+            exit 1
+          fi
+          echo "✅ 确认文本验证通过"
+
+      - name: 验证环境
+        run: |
+          if [ "${{ inputs.environment }}" != "preview" ]; then
+            echo "❌ 策略B仅支持preview环境"
+            echo "生产环境需要额外的审批流程"
+            exit 1
+          fi
+          echo "✅ 环境验证通过: ${{ inputs.environment }}"
+
+      - name: 警告信息
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⚠️  数据库全量重建 - 策略B"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "此操作将："
+          echo "1. 创建数据库完整备份"
+          echo "2. 删除所有Schema和数据"
+          echo "3. 重新执行所有迁移"
+          echo "4. 验证迁移结果"
+          echo ""
+          echo "⚠️  这是一个高风险操作"
+          echo "⚠️  将导致短暂的服务中断"
+          echo "⚠️  请确保已通知相关人员"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  # ============================================================================
+  # Job 2: 构建迁移镜像
+  # ============================================================================
+  build-migrator-image:
+    name: 构建迁移镜像
+    needs: safety-checks
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.image_info.outputs.tag }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 认证到Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: 设置Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 配置Docker认证
+        run: |
+          gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+
+      - name: 构建迁移镜像
+        run: |
+          docker build \
+            -f deployments/db-migrator/Dockerfile.migrate \
+            -t ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -t ${{ env.IMAGE_NAME }}:strategy-b-latest \
+            .
+
+      - name: 推送镜像
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.IMAGE_NAME }}:strategy-b-latest
+
+      - name: 输出镜像信息
+        id: image_info
+        run: |
+          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "✅ 镜像已构建: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+  # ============================================================================
+  # Job 3: 创建数据库备份
+  # ============================================================================
+  create-backup:
+    name: 创建数据库备份
+    needs: build-migrator-image
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_backup }}
+    outputs:
+      backup_name: ${{ steps.backup.outputs.backup_name }}
+    steps:
+      - name: 认证到Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: 设置Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 创建备份Job
+        run: |
+          JOB_NAME="db-backup-strategy-b-${{ env.TARGET_ENV }}"
+          
+          # 删除旧job（如果存在）
+          gcloud run jobs delete $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --quiet || true
+          
+          # 创建新job
+          gcloud run jobs create $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --image=${{ env.IMAGE_NAME }}:${{ needs.build-migrator-image.outputs.image_tag }} \
+            --set-env-vars="BACKUP_NAME=${{ inputs.backup_name }}" \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+            --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+            --max-retries=0 \
+            --task-timeout=30m \
+            --command="/backup.sh"
+
+      - name: 执行备份
+        id: backup
+        run: |
+          JOB_NAME="db-backup-strategy-b-${{ env.TARGET_ENV }}"
+          
+          echo "开始执行备份..."
+          gcloud run jobs execute $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --wait
+          
+          echo "backup_name=gm_db_$(date +%Y%m%d_%H%M%S)" >> $GITHUB_OUTPUT
+
+      - name: 获取备份日志
+        if: always()
+        run: |
+          JOB_NAME="db-backup-strategy-b-${{ env.TARGET_ENV }}"
+          
+          EXECUTION=$(gcloud run jobs executions list \
+            --job=$JOB_NAME \
+            --region=${{ env.REGION }} \
+            --limit=1 \
+            --format="value(name)")
+          
+          if [ -n "$EXECUTION" ]; then
+            echo "获取备份日志..."
+            gcloud logging read \
+              "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME" \
+              --limit=200 \
+              --format=json
+          fi
+
+  # ============================================================================
+  # Job 4: 执行数据库重置
+  # ============================================================================
+  reset-database:
+    name: 重置数据库
+    needs: [build-migrator-image, create-backup]
+    if: |
+      always() && 
+      needs.build-migrator-image.result == 'success' &&
+      (needs.create-backup.result == 'success' || inputs.skip_backup)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 认证到Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: 设置Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 创建重置Job
+        run: |
+          JOB_NAME="db-reset-strategy-b-${{ env.TARGET_ENV }}"
+          
+          # 删除旧job（如果存在）
+          gcloud run jobs delete $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --quiet || true
+          
+          # 创建新job
+          gcloud run jobs create $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --image=${{ env.IMAGE_NAME }}:${{ needs.build-migrator-image.outputs.image_tag }} \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+            --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+            --max-retries=0 \
+            --task-timeout=10m \
+            --command="/reset.sh"
+
+      - name: 执行数据库重置
+        run: |
+          JOB_NAME="db-reset-strategy-b-${{ env.TARGET_ENV }}"
+          
+          echo "⚠️  开始执行数据库重置..."
+          gcloud run jobs execute $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --wait
+
+      - name: 获取重置日志
+        if: always()
+        run: |
+          JOB_NAME="db-reset-strategy-b-${{ env.TARGET_ENV }}"
+          
+          EXECUTION=$(gcloud run jobs executions list \
+            --job=$JOB_NAME \
+            --region=${{ env.REGION }} \
+            --limit=1 \
+            --format="value(name)")
+          
+          if [ -n "$EXECUTION" ]; then
+            echo "获取重置日志..."
+            gcloud logging read \
+              "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME" \
+              --limit=200 \
+              --format=json
+          fi
+
+  # ============================================================================
+  # Job 5: 执行迁移（顺序执行）
+  # ============================================================================
+  run-migrations:
+    name: 执行迁移
+    needs: [build-migrator-image, reset-database]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [billing, adscenter, offer, console]
+      max-parallel: 1  # 顺序执行，确保依赖关系
+    steps:
+      - name: 认证到Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: 设置Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 创建/更新迁移Job
+        run: |
+          JOB_NAME="db-migrate-${{ matrix.service }}-strategy-b-${{ env.TARGET_ENV }}"
+          
+          # 删除旧job（如果存在）
+          gcloud run jobs delete $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --quiet || true
+          
+          # 创建新job
+          gcloud run jobs create $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --image=${{ env.IMAGE_NAME }}:${{ needs.build-migrator-image.outputs.image_tag }} \
+            --set-env-vars="SERVICE_NAME=${{ matrix.service }}" \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+            --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+            --max-retries=0 \
+            --task-timeout=10m
+
+      - name: 执行迁移
+        run: |
+          JOB_NAME="db-migrate-${{ matrix.service }}-strategy-b-${{ env.TARGET_ENV }}"
+          
+          echo "执行 ${{ matrix.service }} 服务迁移..."
+          gcloud run jobs execute $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --wait
+
+      - name: 获取迁移日志
+        if: always()
+        run: |
+          JOB_NAME="db-migrate-${{ matrix.service }}-strategy-b-${{ env.TARGET_ENV }}"
+          
+          EXECUTION=$(gcloud run jobs executions list \
+            --job=$JOB_NAME \
+            --region=${{ env.REGION }} \
+            --limit=1 \
+            --format="value(name)")
+          
+          if [ -n "$EXECUTION" ]; then
+            echo "获取 ${{ matrix.service }} 迁移日志..."
+            gcloud logging read \
+              "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME" \
+              --limit=100 \
+              --format=json
+          fi
+
+  # ============================================================================
+  # Job 6: 验证迁移结果
+  # ============================================================================
+  validate-migrations:
+    name: 验证迁移结果
+    needs: [build-migrator-image, run-migrations]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 认证到Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: 设置Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 创建验证Job
+        run: |
+          JOB_NAME="db-validate-strategy-b-${{ env.TARGET_ENV }}"
+          
+          # 删除旧job（如果存在）
+          gcloud run jobs delete $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --quiet || true
+          
+          # 创建新job
+          gcloud run jobs create $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --image=${{ env.IMAGE_NAME }}:${{ needs.build-migrator-image.outputs.image_tag }} \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+            --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+            --max-retries=0 \
+            --task-timeout=5m \
+            --command="psql" \
+            --args="$DATABASE_URL,-f,/scripts/validate-database.sql"
+
+      - name: 执行验证
+        run: |
+          JOB_NAME="db-validate-strategy-b-${{ env.TARGET_ENV }}"
+          
+          echo "执行数据库验证..."
+          gcloud run jobs execute $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --wait
+
+      - name: 获取验证日志
+        if: always()
+        run: |
+          JOB_NAME="db-validate-strategy-b-${{ env.TARGET_ENV }}"
+          
+          EXECUTION=$(gcloud run jobs executions list \
+            --job=$JOB_NAME \
+            --region=${{ env.REGION }} \
+            --limit=1 \
+            --format="value(name)")
+          
+          if [ -n "$EXECUTION" ]; then
+            echo "获取验证日志..."
+            gcloud logging read \
+              "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME" \
+              --limit=200 \
+              --format=json
+          fi
+
+  # ============================================================================
+  # Job 7: 生成执行报告
+  # ============================================================================
+  generate-report:
+    name: 生成执行报告
+    needs: [create-backup, reset-database, run-migrations, validate-migrations]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 生成报告
+        run: |
+          cat > strategy-b-report.md << 'EOF'
+          # 策略B执行报告 - 数据库全量重建
+          
+          **执行时间**: $(date '+%Y-%m-%d %H:%M:%S')
+          **环境**: ${{ env.TARGET_ENV }}
+          **触发人**: ${{ github.actor }}
+          **提交**: ${{ github.sha }}
+          
+          ## 执行状态
+          
+          - 安全检查: ${{ needs.safety-checks.result }}
+          - 镜像构建: ${{ needs.build-migrator-image.result }}
+          - 数据库备份: ${{ needs.create-backup.result }}
+          - 数据库重置: ${{ needs.reset-database.result }}
+          - 迁移执行: ${{ needs.run-migrations.result }}
+          - 结果验证: ${{ needs.validate-migrations.result }}
+          
+          ## 备份信息
+          
+          备份名称: ${{ needs.create-backup.outputs.backup_name || '已跳过' }}
+          
+          ## 迁移顺序
+          
+          1. ✅ billing - 基础用户和订阅数据
+          2. ✅ adscenter - 广告账户管理
+          3. ✅ offer - Offer管理
+          4. ✅ console - 管理控制台视图
+          
+          ## 下一步操作
+          
+          1. 检查所有服务的健康状态
+          2. 运行端到端测试
+          3. 监控应用日志
+          4. 验证数据完整性
+          
+          ## 回滚说明
+          
+          如需回滚，使用以下备份文件：
+          - 备份名称: ${{ needs.create-backup.outputs.backup_name }}
+          - 恢复命令: 参见备份报告
+          
+          ---
+          
+          **执行方式**: Cloud Run Job + Unix Socket
+          **镜像**: ${{ env.IMAGE_NAME }}:${{ needs.build-migrator-image.outputs.image_tag }}
+          EOF
+          
+          cat strategy-b-report.md
+
+      - name: 上传报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: strategy-b-execution-report
+          path: strategy-b-report.md
+
+  # ============================================================================
+  # Job 8: 失败时自动回滚（可选）
+  # ============================================================================
+  rollback-on-failure:
+    name: 失败回滚
+    needs: [create-backup, reset-database, run-migrations, validate-migrations]
+    if: |
+      failure() && 
+      !inputs.skip_backup &&
+      needs.create-backup.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 认证到Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: 设置Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: 回滚警告
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⚠️  检测到执行失败，准备回滚"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: 执行回滚
+        run: |
+          echo "回滚功能需要手动执行"
+          echo "备份文件: ${{ needs.create-backup.outputs.backup_name }}"
+          echo "请联系运维团队执行恢复操作"

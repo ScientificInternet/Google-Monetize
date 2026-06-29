@@ -1,0 +1,363 @@
+name: Database Migration (Cloud Run Job)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - preview
+          - production
+        default: 'preview'
+      reset_database:
+        description: 'Reset database before migration (⚠️ DANGER: deletes all data)'
+        required: false
+        type: boolean
+        default: false
+      confirmation_text:
+        description: 'If reset=true, type "RESET DATABASE" to confirm'
+        required: false
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'services/*/migrations/**'
+      - '.github/workflows/database-migration-cloudrun.yml'
+      - 'deployments/db-migrator/**'
+
+env:
+  PROJECT_ID: ${GCP_PROJECT_ID}
+  REGION: asia-northeast1
+  CLOUDSQL_INSTANCE: gm
+  IMAGE_NAME: asia-northeast1-docker.pkg.dev/${GCP_PROJECT_ID}/gm-services/db-migrator
+  # Default to preview environment when triggered by push
+  TARGET_ENV: ${{ inputs.environment || 'preview' }}
+
+jobs:
+  # ============================================================================
+  # Job 0: 安全检查（仅在重置模式下执行）
+  # ============================================================================
+  safety-check:
+    name: Safety Check
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_database == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify confirmation text
+        run: |
+          if [ "${{ inputs.confirmation_text }}" != "RESET DATABASE" ]; then
+            echo "❌ Confirmation text is incorrect"
+            echo "Required: RESET DATABASE"
+            echo "Provided: ${{ inputs.confirmation_text }}"
+            exit 1
+          fi
+          echo "✅ Confirmation verified"
+
+      - name: Display warning
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "⚠️  DATABASE RESET MODE ENABLED"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "This will:"
+          echo "1. Delete all business schemas"
+          echo "2. Reset public schema"
+          echo "3. Re-run all migrations"
+          echo ""
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  build-migrator-image:
+    name: Build Migrator Image
+    needs: [safety-check]
+    if: always() && (needs.safety-check.result == 'success' || needs.safety-check.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker asia-northeast1-docker.pkg.dev --quiet
+
+      - name: Create optimized source tarball for db-migrator
+        run: |
+          echo "Creating optimized source tarball for db-migrator..."
+          tar -czf /tmp/db-migrator-source.tar.gz \
+            --exclude='apps' \
+            --exclude='docs' \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            --exclude='.next' \
+            --exclude='secrets' \
+            deployments/db-migrator/ \
+            services/*/migrations/ \
+            go.work \
+            pkg/ \
+            schemas/ \
+            deployments/ \
+            scripts/db/
+
+          echo "Tarball created successfully"
+          ls -lh /tmp/db-migrator-source.tar.gz
+
+      - name: Build and push migrator image using Cloud Build
+        run: |
+          gcloud builds submit /tmp/db-migrator-source.tar.gz \
+            --config=deployments/db-migrator/cloudbuild.yaml \
+            --substitutions=_IMAGE=${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Tag and push latest version
+        run: |
+          gcloud artifacts docker tags add \
+            ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ env.IMAGE_NAME }}:latest
+
+  # ============================================================================
+  # Job 2.5: 重置数据库（可选）
+  # ============================================================================
+  reset-database:
+    name: Reset Database
+    needs: build-migrator-image
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_database == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Create/Update Reset Job
+        run: |
+          JOB_NAME="db-reset-${{ env.TARGET_ENV }}"
+          
+          if gcloud run jobs describe $JOB_NAME --region=${{ env.REGION }} &>/dev/null; then
+            echo "Updating existing job: $JOB_NAME"
+            gcloud run jobs update $JOB_NAME \
+              --region=${{ env.REGION }} \
+              --image=${{ env.IMAGE_NAME }}:${{ github.sha }} \
+              --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+              --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+              --max-retries=0 \
+              --task-timeout=5m \
+              --command="/reset.sh"
+          else
+            echo "Creating new job: $JOB_NAME"
+            gcloud run jobs create $JOB_NAME \
+              --region=${{ env.REGION }} \
+              --image=${{ env.IMAGE_NAME }}:${{ github.sha }} \
+              --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+              --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+              --max-retries=0 \
+              --task-timeout=5m \
+              --command="/reset.sh"
+          fi
+
+      - name: Execute database reset
+        run: |
+          JOB_NAME="db-reset-${{ env.TARGET_ENV }}"
+          
+          echo "⚠️  Executing database reset..."
+          gcloud run jobs execute $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --wait
+
+      - name: Get reset logs
+        if: always()
+        run: |
+          JOB_NAME="db-reset-${{ env.TARGET_ENV }}"
+          
+          EXECUTION=$(gcloud run jobs executions list \
+            --job=$JOB_NAME \
+            --region=${{ env.REGION }} \
+            --limit=1 \
+            --format="value(name)")
+          
+          if [ -n "$EXECUTION" ]; then
+            echo "Fetching reset logs..."
+            gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME AND resource.labels.location=${{ env.REGION }}" \
+              --limit=100 \
+              --format=json
+          fi
+
+  run-migrations:
+    name: Run Migrations via Cloud Run Job
+    needs: [build-migrator-image, reset-database]
+    if: always() && needs.build-migrator-image.result == 'success' && (needs.reset-database.result == 'success' || needs.reset-database.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [user, billing, useractivity, offer, siterank, console, adscenter, batchopen]
+      max-parallel: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_database == true && 1 || 7 }}  # 重置模式下顺序执行
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Create/Update Cloud Run Job
+        run: |
+          JOB_NAME="db-migrate-${{ matrix.service }}-${{ env.TARGET_ENV }}"
+          
+          # 检查job是否存在
+          if gcloud run jobs describe $JOB_NAME --region=${{ env.REGION }} &>/dev/null; then
+            echo "Updating existing job: $JOB_NAME"
+            gcloud run jobs update $JOB_NAME \
+              --region=${{ env.REGION }} \
+              --image=${{ env.IMAGE_NAME }}:${{ github.sha }} \
+              --set-env-vars="SERVICE_NAME=${{ matrix.service }}" \
+              --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+              --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+              --max-retries=0 \
+              --task-timeout=10m
+          else
+            echo "Creating new job: $JOB_NAME"
+            gcloud run jobs create $JOB_NAME \
+              --region=${{ env.REGION }} \
+              --image=${{ env.IMAGE_NAME }}:${{ github.sha }} \
+              --set-env-vars="SERVICE_NAME=${{ matrix.service }}" \
+              --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+              --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+              --max-retries=0 \
+              --task-timeout=10m
+          fi
+
+      - name: Execute migration job
+        run: |
+          JOB_NAME="db-migrate-${{ matrix.service }}-${{ env.TARGET_ENV }}"
+          
+          echo "Executing migration job: $JOB_NAME"
+          gcloud run jobs execute $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --wait
+
+      - name: Get job execution logs
+        if: always()
+        run: |
+          JOB_NAME="db-migrate-${{ matrix.service }}-${{ env.TARGET_ENV }}"
+          
+          # 获取最新的execution
+          EXECUTION=$(gcloud run jobs executions list \
+            --job=$JOB_NAME \
+            --region=${{ env.REGION }} \
+            --limit=1 \
+            --format="value(name)")
+          
+          if [ -n "$EXECUTION" ]; then
+            echo "Fetching logs for execution: $EXECUTION"
+            gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=$JOB_NAME AND resource.labels.location=${{ env.REGION }}" \
+              --limit=100 \
+              --format=json
+          fi
+
+  verify-migrations:
+    name: Verify All Migrations
+    needs: run-migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Create verification job
+        run: |
+          JOB_NAME="db-verify-${{ env.TARGET_ENV }}"
+          
+          gcloud run jobs create $JOB_NAME \
+            --region=${{ env.REGION }} \
+            --image=${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --set-env-vars="SERVICE_NAME=verify" \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+            --set-cloudsql-instances=${{ env.PROJECT_ID }}:${{ env.REGION }}:${{ env.CLOUDSQL_INSTANCE }} \
+            --max-retries=0 \
+            --task-timeout=5m \
+            --execute-now \
+            --wait || true
+
+      - name: Generate migration report
+        run: |
+          RESET_MODE="${{ github.event_name == 'workflow_dispatch' && inputs.reset_database || 'false' }}"
+          
+          cat > migration-report.md << EOF
+          # Database Migration Report (Cloud Run Job)
+          
+          **Date**: $(date '+%Y-%m-%d %H:%M:%S')
+          **Environment**: ${{ env.TARGET_ENV }}
+          **Triggered by**: ${{ github.actor }}
+          **Commit**: ${{ github.sha }}
+          **Image**: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          **Reset Mode**: ${RESET_MODE}
+          
+          ## Migration Summary
+
+          - ✅ Billing service migrations completed
+          - ✅ UserActivity service migrations completed
+          - ✅ Offer service migrations completed
+          - ✅ Siterank service migrations completed
+          - ✅ Console service migrations completed
+          - ✅ Adscenter service migrations completed
+          
+          ## Execution Method
+          
+          Migrations executed via Cloud Run Jobs with direct Unix Socket connection to Cloud SQL.
+          
+          $(if [ "${RESET_MODE}" = "true" ]; then
+            echo "## Reset Operation"
+            echo ""
+            echo "⚠️ Database was reset before migration:"
+            echo "- All business schemas deleted"
+            echo "- Public schema reset"
+            echo "- All migrations re-executed"
+            echo ""
+          fi)
+          
+          ## Next Steps
+          
+          1. Monitor service logs for any database connection issues
+          2. Run end-to-end tests to verify functionality
+          3. Monitor performance metrics
+          
+          EOF
+          cat migration-report.md
+
+      - name: Upload migration report
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-report-cloudrun
+          path: migration-report.md

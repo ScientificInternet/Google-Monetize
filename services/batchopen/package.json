@@ -1,0 +1,12 @@
+{
+  "name": "batchopen",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.go",
+  "scripts": {
+    "build": "cd /home/user/gm/services/batchopen && go mod init gm/batchopen && go build ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

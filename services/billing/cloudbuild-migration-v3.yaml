@@ -1,0 +1,53 @@
+# Database Schema Migration v3 - Cloud SQL Direct Connection
+# Executes the optimized database schema migration with all business domains
+
+steps:
+  # Build the migration container
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/billing-migration-v3:$BUILD_ID'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/billing-migration-v3:latest'
+      - '-f'
+      - 'Dockerfile.migration'
+      - '.'
+
+  # Execute database migration using Cloud Run Job
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'execute'
+      - 'billing-migration-v3-$BUILD_ID'
+      - '--region=asia-northeast1'
+      - '--image=gcr.io/$PROJECT_ID/billing-migration-v3:$BUILD_ID'
+      - '--set-env-vars=MIGRATIONS_DIR=/app/migrations'
+      - '--set-env-vars=DATABASE_URL=$$DATABASE_URL'
+      - '--set-secrets=DATABASE_URL=billing-db-url:latest'
+      - '--task-timeout=1800s'
+      - '--memory=1Gi'
+      - '--cpu=1'
+    secretEnv:
+      - 'DATABASE_URL'
+
+# Images to push to the registry
+images:
+  - 'gcr.io/$PROJECT_ID/billing-migration-v3:$BUILD_ID'
+  - 'gcr.io/$PROJECT_ID/billing-migration-v3:latest'
+
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
+
+substitutions:
+  _REGION: 'asia-northeast1'
+
+tags:
+  - 'billing'
+  - 'migration'
+  - 'schema-v3'
+  - 'cloud-sql-direct'

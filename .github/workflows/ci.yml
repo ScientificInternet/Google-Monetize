@@ -1,0 +1,160 @@
+name: Continuous Integration
+
+on:
+  pull_request:
+    branches: [ main, production ]
+  push:
+    branches: [ main, production ]
+
+permissions:
+  contents: read
+
+jobs:
+  go-tests:
+    name: Go Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.25.1
+
+      - name: Download modules
+        run: go mod download
+
+      - name: gofmt diff check
+        run: |
+          CHANGED=$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))
+          if [ -n "${CHANGED}" ]; then
+            echo "Files not gofmt'ed:"
+            echo "${CHANGED}"
+            exit 1
+          fi
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Run Go tests per module
+        run: |
+          set -euo pipefail
+          MODULES=$(go work edit -json | jq -r '.Use[].DiskPath')
+          if [ -z "$MODULES" ]; then
+            echo "No modules discovered in go.work"
+            exit 1
+          fi
+          for mod in $MODULES; do
+            echo "🏃 Running tests for module: $mod"
+            pushd "$mod" >/dev/null
+            GOWORK=off go test ./...
+            popd >/dev/null
+          done
+          echo "✅ All module tests passed"
+
+  node-quality:
+    name: Frontend Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install workspace dependencies
+        run: npm ci --workspaces --include-workspace-root
+
+      - name: Lint (Turbo)
+        run: npm run lint
+
+      - name: Frontend type check
+        run: npm run typecheck --workspace apps/frontend
+
+  node-tests:
+    name: Browser Exec Integration Tests
+    runs-on: ubuntu-latest
+    env:
+      BROWSER_EXEC_PREVIEW_URL: ${{ secrets.BROWSER_EXEC_PREVIEW_URL }}
+      BROWSER_EXEC_INTERNAL_TOKEN: ${{ secrets.BROWSER_EXEC_INTERNAL_TOKEN }}
+    steps:
+      - name: Checkout
+        if: ${{ env.BROWSER_EXEC_PREVIEW_URL != '' }}
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: ${{ env.BROWSER_EXEC_PREVIEW_URL != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install workspace dependencies
+        if: ${{ env.BROWSER_EXEC_PREVIEW_URL != '' }}
+        run: npm ci --workspaces --include-workspace-root
+
+      - name: Run browser-exec tests
+        if: ${{ env.BROWSER_EXEC_PREVIEW_URL != '' }}
+        env:
+          BROWSER_EXEC_URL: ${{ env.BROWSER_EXEC_PREVIEW_URL }}
+          BROWSER_INTERNAL_TOKEN: ${{ env.BROWSER_EXEC_INTERNAL_TOKEN }}
+        run: npm run test --workspace browser-exec --if-present
+
+  openapi-suite:
+    name: OpenAPI Contract & Generation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22.x
+
+      - name: Install oapi-codegen
+        run: |
+          go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.0
+          echo "$GOPATH/bin" >> $GITHUB_PATH
+
+      - name: Enforce single-source OpenAPI
+        run: bash scripts/openapi/enforce-single-source.sh
+
+      - name: Run contract tests
+        run: bash scripts/openapi/contract-test.sh
+
+      - name: Generate stubs and types
+        run: bash scripts/openapi/generate.sh
+
+      - name: Ensure generated artifacts committed
+        run: |
+          if ! git diff --quiet --exit-code; then
+            echo "OpenAPI generation produced changes. Please commit generated files." >&2
+            git --no-pager diff --stat
+            exit 1
+          fi
+
+  secrets-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run GitLeaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

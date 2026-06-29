@@ -1,0 +1,19 @@
+# Migration configuration for user service
+service_name: user
+schema_name: user
+description: User domain schema - Primary user management domain
+
+# Migration settings
+migration_table: schema_migrations_user
+lock_timeout: 10s
+statement_timeout: 30s
+
+# Architecture:
+# - user.users: Primary user business data (Profile, preferences, metadata)
+# - Supabase auth.users: Authentication data (OAuth, JWT, passwords)
+# - Data sync: Supabase auth.users → user.users (one-way)
+# - Other services: Reference user.users(id) for foreign keys
+#
+# Execution Order:
+# - This migration MUST run FIRST before all other service migrations
+# - Other services (billing, offer, etc.) depend on user.users table

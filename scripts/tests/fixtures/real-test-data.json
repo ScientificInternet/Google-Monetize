@@ -1,0 +1,176 @@
+{
+  "testConfiguration": {
+    "description": "真实Offer测试数据配置",
+    "version": "1.0.0",
+    "lastUpdated": "2025-10-16"
+  },
+  "realOffers": [
+    {
+      "id": "offer-001",
+      "title": "PBoost Test Offer - US Market",
+      "landingPageUrl": "https://pboost.me/ZDO2Bdek",
+      "country": "US",
+      "category": "Gaming",
+      "description": "Real offer for comprehensive E2E testing",
+      "expectedMetrics": {
+        "shouldHaveGlobalRank": true,
+        "shouldHaveBrandName": true,
+        "shouldPassBasicEvaluation": true
+      },
+      "testScenarios": [
+        "basic_evaluation",
+        "ai_evaluation",
+        "complete_evaluation",
+        "token_consumption"
+      ]
+    },
+    {
+      "id": "offer-002",
+      "title": "Nike Official Store - US",
+      "landingPageUrl": "https://www.nike.com",
+      "country": "US",
+      "category": "E-commerce",
+      "description": "High-quality brand for brand extraction testing",
+      "expectedMetrics": {
+        "expectedBrandName": "Nike",
+        "expectedGlobalRank": true,
+        "expectedCategory": "E-commerce"
+      },
+      "testScenarios": [
+        "brand_extraction",
+        "similarweb_data"
+      ]
+    },
+    {
+      "id": "offer-003",
+      "title": "Shopify Homepage",
+      "landingPageUrl": "https://www.shopify.com",
+      "country": "US",
+      "category": "Technology",
+      "description": "SaaS platform for evaluation testing",
+      "expectedMetrics": {
+        "expectedBrandName": "Shopify",
+        "expectedGlobalRank": true,
+        "expectedHighQuality": true
+      },
+      "testScenarios": [
+        "basic_evaluation",
+        "brand_extraction"
+      ]
+    }
+  ],
+  "proxyConfiguration": {
+    "us": {
+      "url": "https://api.iprocket.io/api?username=com49692430&password=Qxi9V59e3kNOW6pnRi3i&cc=ROW&ips=1&type=-res-&proxyType=http&responseType=txt",
+      "country": "US",
+      "description": "US residential proxy for US market testing",
+      "usage": [
+        "US market offer evaluation",
+        "SimilarWeb data fetching",
+        "Landing page scraping"
+      ]
+    },
+    "global": {
+      "url": "https://api.iprocket.io/api?username=com49692430&password=Qxi9V59e3kNOW6pnRi3i&cc=ROW&ips=1&type=-res-&proxyType=http&responseType=txt",
+      "country": "ROW",
+      "description": "Rest of world proxy for global testing"
+    }
+  },
+  "testUsers": [
+    {
+      "id": "37fd3629-a06a-47c8-b33a-31944afaa14c",
+      "email": "test-user@autoads.dev",
+      "role": "user",
+      "subscription": "Professional",
+      "initialTokenBalance": 10000,
+      "features": {
+        "basicEvaluation": true,
+        "aiEvaluation": true,
+        "bulkOperations": true,
+        "adsCenter": true
+      }
+    }
+  ],
+  "testEnvironments": {
+    "production": {
+      "baseUrl": "https://www.urlchecker.dev",
+      "apiUrl": "https://www.urlchecker.dev/api",
+      "services": {
+        "bff": "https://bff-service-url",
+        "siterank": "https://siterank-service-url",
+        "offer": "https://offer-service-url",
+        "billing": "https://billing-service-url"
+      }
+    },
+    "preview": {
+      "baseUrl": "https://preview.urlchecker.dev",
+      "apiUrl": "https://preview.urlchecker.dev/api"
+    }
+  },
+  "expectedBehaviors": {
+    "tokenConsumption": {
+      "basicEvaluation": 1,
+      "aiEvaluation": 2,
+      "completeEvaluation": 3,
+      "bulkOperationPerOffer": 1
+    },
+    "apiResponseTimes": {
+      "dashboard": {
+        "target": 500,
+        "acceptable": 1000,
+        "slow": 2000
+      },
+      "offerEvaluation": {
+        "target": 5000,
+        "acceptable": 10000,
+        "slow": 15000
+      },
+      "similarwebFetch": {
+        "target": 3000,
+        "acceptable": 7000,
+        "slow": 10000
+      }
+    },
+    "cacheSettings": {
+      "dashboardStats": {
+        "ttl": "5m",
+        "key": "dashboard:stats:{userId}"
+      },
+      "similarwebSuccess": {
+        "ttl": "7d",
+        "key": "similarweb:{domain}"
+      },
+      "similarwebError": {
+        "ttl": "1h",
+        "key": "similarweb:{domain}:error"
+      }
+    }
+  },
+  "testDataSeed": {
+    "offersPerUser": 100,
+    "tasksPerUser": 50,
+    "adsConnectionsPerUser": 5,
+    "transactionHistoryDays": 30,
+    "offerStatuses": [
+      "pending_evaluation",
+      "evaluating",
+      "ready_to_deploy",
+      "deployed",
+      "archived",
+      "evaluation_failed"
+    ],
+    "countries": ["US", "UK", "CA", "AU", "DE", "FR", "JP", "BR", "IN", "CN"],
+    "categories": [
+      "Gaming",
+      "Finance",
+      "E-commerce",
+      "Education",
+      "Health",
+      "Travel",
+      "Entertainment",
+      "Technology",
+      "Food",
+      "Fashion"
+    ]
+  }
+}

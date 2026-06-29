@@ -1,0 +1,29 @@
+# Database migration configuration for billing service
+# This file configures golang-migrate for database schema management
+
+# Development environment (uses local env variables)
+development:
+  database_url: ${DATABASE_URL}
+
+# Production environment (uses Secret Manager)
+production:
+  database_url: ${DATABASE_URL}
+  secret_name: ${DATABASE_URL_SECRET_NAME}
+
+# Preview environment (for testing migrations)
+preview:
+  database_url: ${DATABASE_URL}
+
+# Migration settings
+settings:
+  # Number of migrations to run in parallel
+  parallel: 1
+
+  # Lock timeout for migrations (in seconds)
+  lock_timeout: 15
+
+  # Whether to force migration even if schema is dirty
+  force: false
+
+  # Log verbose output
+  verbose: true

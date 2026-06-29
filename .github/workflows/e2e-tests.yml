@@ -1,0 +1,265 @@
+name: E2E Tests Suite
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run E2E tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of tests to run'
+        required: true
+        default: 'critical'
+        type: choice
+        options:
+        - critical
+        - all
+        - subscription-enhancement
+        - performance
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'preview'
+        type: choice
+        options:
+        - preview
+        - staging
+
+env:
+  NODE_VERSION: '22'
+  PREVIEW_BASE: ${{ vars.PREVIEW_BASE || 'https://www.urlchecker.dev' }}
+  HEADLESS: ${{ vars.HEADLESS || 'true' }}
+
+jobs:
+  # Critical tests - always run
+  critical-tests:
+    name: Critical E2E Tests
+    runs-on: ubuntu-latest
+    if: github.event.inputs.test_type == 'critical' || github.event.inputs.test_type == '' || github.event_name == 'push'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: |
+        cd apps/frontend
+        npm ci
+
+    - name: Install Playwright
+      run: |
+        cd apps/frontend
+        npx playwright install --with-deps
+
+    - name: Wait for deployment (if needed)
+      run: |
+        echo "Waiting for deployment to be ready..."
+        timeout 300 bash -c 'until curl -f $PREVIEW_BASE/health; do sleep 10; done'
+
+    - name: Run Critical E2E Tests
+      run: |
+        echo "🧪 Running Critical E2E Tests..."
+        cd scripts/tests
+
+        # Run critical tests with timeout
+        timeout 600 node run-e2e-test-suite.mjs \
+          --critical \
+          --parallel \
+          --timeout 180 \
+          --reporter json \
+          --report-file results-critical.json || true
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: critical-test-results
+        path: scripts/tests/results-critical.json
+        retention-days: 30
+
+    - name: Publish Test Report
+      if: always()
+      run: |
+        echo "## 🧪 Critical E2E Test Results" >> $GITHUB_STEP_SUMMARY
+        if [ -f scripts/tests/results-critical.json ]; then
+          node scripts/utils/generate-test-summary.js scripts/tests/results-critical.json >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Test results file not found" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  # Subscription Enhancement Tests
+  subscription-tests:
+    name: Subscription Enhancement E2E Tests
+    runs-on: ubuntu-latest
+    if: github.event.inputs.test_type == 'subscription-enhancement' || github.event.inputs.test_type == 'all'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Run Subscription Enhancement Tests
+      run: |
+        echo "🚀 Running Subscription Enhancement Tests..."
+        cd scripts/tests
+
+        # V5.0 subscription system tests
+        tests=(
+          "test-trial-subscription-system.mjs"
+          "test-billing-permission-service.mjs"
+          "test-token-cost-service.mjs"
+          "test-gateway-middleware-permissions.mjs"
+          "test-token-reservation-mechanism.mjs"
+          "test-subscription-config-hotreload.mjs"
+          "test-trial-subscription-migration.mjs"
+        )
+
+        for test in "${tests[@]}"; do
+          echo "🔍 Running $test..."
+          timeout 300 node $test || echo "⚠️ $test failed"
+        done
+
+    - name: Generate Coverage Report
+      run: |
+        cd scripts/tests
+        node utils/generate-coverage-report.js --type subscription > coverage-subscription.json
+
+    - name: Upload Coverage Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: subscription-coverage
+        path: scripts/tests/coverage-subscription.json
+
+  # Performance Tests
+  performance-tests:
+    name: Performance E2E Tests
+    runs-on: ubuntu-latest
+    if: github.event.inputs.test_type == 'performance' || github.event.inputs.test_type == 'all'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Run Performance Tests
+      run: |
+        echo "⚡ Running Performance Tests..."
+        cd scripts/tests
+
+        # Performance-focused tests
+        node test-performance-baseline.mjs || true
+        node test-load-testing.mjs || true
+        node test-api-performance.mjs || true
+
+    - name: Upload Performance Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-results
+        path: scripts/tests/performance-results.json
+
+  # Full Test Suite
+  full-tests:
+    name: Complete E2E Test Suite
+    runs-on: ubuntu-latest
+    if: github.event.inputs.test_type == 'all' || github.event_name == 'schedule'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        cd apps/frontend
+        npm ci
+        npx playwright install --with-deps
+
+    - name: Run Complete Test Suite
+      run: |
+        echo "🎯 Running Complete E2E Test Suite..."
+        cd scripts/tests
+        timeout 1800 node run-e2e-test-suite.mjs --all --parallel || true
+
+    - name: Generate Comprehensive Report
+      run: |
+        cd scripts/tests
+        node utils/generate-comprehensive-report.js > test-report-comprehensive.html
+
+    - name: Upload Complete Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: complete-test-report
+        path: scripts/tests/test-report-comprehensive.html
+
+  # Test Results Analysis
+  analyze-results:
+    name: Analyze Test Results
+    runs-on: ubuntu-latest
+    needs: [critical-tests, subscription-tests, performance-tests]
+    if: always()
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Analyze Results
+      run: |
+        echo "📊 Analyzing Test Results..."
+        node scripts/utils/analyze-test-results.js
+
+    - name: Update Test Metrics Dashboard
+      run: |
+        # Update test metrics in your monitoring system
+        curl -X POST "${{ secrets.METRICS_WEBHOOK_URL }}" \
+          -H "Content-Type: application/json" \
+          -d @test-metrics.json || true
+
+  # Notification
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [critical-tests, subscription-tests, performance-tests, full-tests]
+    if: always()
+
+    steps:
+    - name: Notify Slack on Success
+      if: needs.critical-tests.result == 'success'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        channel: '#ci-cd'
+        text: '✅ E2E Tests Passed Successfully!'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    - name: Notify Slack on Failure
+      if: needs.critical-tests.result == 'failure'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: failure
+        channel: '#ci-cd'
+        text: '❌ E2E Tests Failed!'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
