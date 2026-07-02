@@ -138,3 +138,11 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/circuitbreaker => ../.
 replace github.com/ScientificInternet/Google-Monetize/pkg/dbadmin => ../../pkg/dbadmin
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/serviceclient => ../../pkg/serviceclient
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/errorreporting => ../../pkg/errorreporting
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/eventstore => ../../pkg/eventstore
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/noop => ../../pkg/noop
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/testutil => ../../pkg/testutil

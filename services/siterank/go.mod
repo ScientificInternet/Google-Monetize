@@ -130,3 +130,19 @@ require (
 	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/circuitbreaker => ../../pkg/circuitbreaker
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/config => ../../pkg/config
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/errorreporting => ../../pkg/errorreporting
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/metrics => ../../pkg/metrics
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/noop => ../../pkg/noop
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/ratelimitredis => ../../pkg/ratelimitredis
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/redislock => ../../pkg/redislock
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/testutil => ../../pkg/testutil

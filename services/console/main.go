@@ -10,7 +10,6 @@ import (
 	"github.com/ScientificInternet/Google-Monetize/pkg/database"
 	"github.com/ScientificInternet/Google-Monetize/services/console/internal/config"
 	"github.com/ScientificInternet/Google-Monetize/services/console/internal/handlers"
-	"github.com/ScientificInternet/Google-Monetize/services/console/internal/storage"
 
 	"github.com/ScientificInternet/Google-Monetize/pkg/cache"
 	"github.com/ScientificInternet/Google-Monetize/pkg/middleware"
@@ -67,10 +66,7 @@ func main() {
 	defer adapter.Close()
 
 	// Get pgxpool for handlers
-	dbpool, ok := adapter.GetCloudSQLPool().(*pgxpool.Pool)
-	if !ok {
-		log.Fatalf("Expected pgxpool.Pool from adapter")
-	}
+	dbpool := adapter.GetCloudSQLPool()
 
 	// In a real CQRS system, the console would use a command bus to send commands.
 	// For simplicity here, we might pass the publisher directly or use service clients.

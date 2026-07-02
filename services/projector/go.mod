@@ -106,3 +106,29 @@ require (
 	google.golang.org/grpc v1.75.1 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 )
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/apierrors => ../../pkg/apierrors
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/circuitbreaker => ../../pkg/circuitbreaker
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/config => ../../pkg/config
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/dbadmin => ../../pkg/dbadmin
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/dburl => ../../pkg/dburl
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/errorreporting => ../../pkg/errorreporting
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/metrics => ../../pkg/metrics
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/noop => ../../pkg/noop
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/pagination => ../../pkg/pagination
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/ratelimitredis => ../../pkg/ratelimitredis
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/redislock => ../../pkg/redislock
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/serviceclient => ../../pkg/serviceclient
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/testutil => ../../pkg/testutil

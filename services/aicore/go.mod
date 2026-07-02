@@ -52,3 +52,13 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/serviceclient => ../..
 replace github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth => ../../pkg/supabaseauth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/telemetry => ../../pkg/telemetry
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/dbadmin => ../../pkg/dbadmin
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/metrics => ../../pkg/metrics
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/ratelimitredis => ../../pkg/ratelimitredis
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/redislock => ../../pkg/redislock
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/testutil => ../../pkg/testutil
