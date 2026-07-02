@@ -2,12 +2,12 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
-	"golang.org/x/oauth2/google"
-	"cloud.google.com/go/secretmanager/apiv1"
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
+	secretmanagerpb "cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 )
 
 // AdsConfig holds Google Ads OAuth configuration
@@ -45,45 +45,28 @@ func loadFromSecretManager(ctx context.Context, projectID string) (*AdsConfig, e
 	defer client.Close()
 
 	config := &AdsConfig{}
-
-	// Load client ID
 	if err := loadSecret(ctx, client, projectID, "GOOGLE_ADS_CLIENT_ID", &config.OAuthClientID); err != nil {
 		return nil, err
 	}
-
-	// Load client secret
 	if err := loadSecret(ctx, client, projectID, "GOOGLE_ADS_CLIENT_SECRET", &config.OAuthClientSecret); err != nil {
 		return nil, err
 	}
-
 	return config, nil
 }
 
 // loadSecret loads a specific secret from Secret Manager
 func loadSecret(ctx context.Context, client *secretmanager.Client, projectID, secretName string, target *string) error {
 	name := fmt.Sprintf("projects/%s/secrets/%s/versions/latest", projectID, secretName)
-
-	req := &secretmanager.AccessSecretVersionRequest{
+	req := &secretmanagerpb.AccessSecretVersionRequest{
 		Name: name,
 	}
-
 	result, err := client.AccessSecretVersion(ctx, req)
 	if err != nil {
 		return err
 	}
-
 	if result.Payload == nil || result.Payload.Data == nil {
 		return fmt.Errorf("secret payload is empty")
 	}
-
 	*target = string(result.Payload.Data)
 	return nil
-}
-
-// getEnvOrDefault gets environment variable or returns default value
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }
