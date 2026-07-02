@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
+	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	"github.com/ScientificInternet/Google-Monetize/pkg/database"
 	pcache "github.com/ScientificInternet/Google-Monetize/pkg/cache"
 	apperr "github.com/ScientificInternet/Google-Monetize/pkg/errors"
@@ -36,24 +38,26 @@ type Server struct {
 
 	// Metrics
 	metrics *Metrics
+
+	// Lazily-built *sql.DB bridge over the Cloud SQL pool (pgx stdlib)
+	sqlDBOnce sync.Once
+	sqlDB     *sql.DB
 }
 
 // GetDB provides backward compatibility with *sql.DB interface
 func (s *Server) GetDB() *sql.DB {
-	// This method provides compatibility for existing code
-	// New code should use s.Adapter directly
-	if _, ok := s.Adapter.(*database.FinalAdapter); ok {
-		// FinalAdapter doesn't support direct *sql.DB access
-		panic("FinalAdapter does not support direct *sql.DB access. Use Adapter methods instead.")
-	}
-
-	// For other adapter types, try to get underlying connection
-	if sqlDB := s.Adapter.GetSupabaseDB(); sqlDB != nil {
-		return sqlDB
-	}
-
-	// This should not happen with FinalAdapter
-	return nil
+	// FinalAdapter is Cloud SQL (pgxpool)-backed. Bridge the pool to a *sql.DB via
+	// the pgx stdlib adapter so handlers expecting *sql.DB keep working, instead of
+	// panicking. Built once and cached.
+	s.sqlDBOnce.Do(func() {
+		if pool := s.Adapter.GetCloudSQLPool(); pool != nil {
+			s.sqlDB = pgxstdlib.OpenDBFromPool(pool)
+			return
+		}
+		// Fallback: adapters that expose a *sql.DB directly.
+		s.sqlDB = s.Adapter.GetSupabaseDB()
+	})
+	return s.sqlDB
 }
 
 // ExecContext executes a query using the adapter
