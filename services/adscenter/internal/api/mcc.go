@@ -141,33 +141,11 @@ func (h *MCCHandler) HandleLink(w http.ResponseWriter, r *http.Request) {
 		// Load Google Ads credentials
 		cfg, _ := adscfg.LoadAdsCreds(ctx)
 
-		// Get user refresh token from user service via API call
-		var tokenData struct {
-			RefreshToken    string `json:"refresh_token"`
-			LoginCustomerID string `json:"login_customer_id"`
-		}
-
-		// Try to get user's refresh token from user service
-		if tokenResp, err := fetch("https://user-preview-yt54xvsg5q-an.a.run.app/api/v1/users/auth/oauth/tokens", {
-			headers: {
-				"Authorization": r.Header.Get("Authorization"),
-				"Content-Type": "application/json",
-			},
-		}); err == nil {
-			defer tokenResp.Body.Close()
-			if tokenResp.StatusCode == 200 {
-				if err := json.NewDecoder(tokenResp.Body).Decode(&tokenData); err == nil && tokenData.RefreshToken != "" {
-					rt = tokenData.RefreshToken
-					loginCID = tokenData.LoginCustomerID
-				}
-			}
-		}
-
-		// Fallback to system-level refresh token
-		if rt == "" {
-			rt = cfg.RefreshToken
-			loginCID = cfg.LoginCustomerID
-		}
+		// Refresh token comes from the deployer's own config (self-hosted).
+		// The user-service token-custody call was removed; per-user local OAuth
+		// is handled separately (token stays on the user's machine).
+		rt := cfg.RefreshToken
+		loginCID := cfg.LoginCustomerID
 
 		client, err := adsstub.NewClient(ctx, adsstub.LiveConfig{
 			DeveloperToken:    cfg.DeveloperToken,
