@@ -41,32 +41,32 @@ func (w *FinalAdapterWrapper) Ping(ctx context.Context) error {
 
 // Query 执行查询并返回多行结果
 func (w *FinalAdapterWrapper) Query(query string, args ...interface{}) (*sql.Rows, error) {
-	return w.adapter.QueryContext(context.Background(), query, args...)
+	return w.adapter.Query(context.Background(), query, args...)
 }
 
 // QueryContext 执行查询并返回多行结果
 func (w *FinalAdapterWrapper) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	return w.adapter.QueryContext(ctx, query, args...)
+	return w.adapter.Query(ctx, query, args...)
 }
 
 // QueryRow 执行查询并返回单行结果
 func (w *FinalAdapterWrapper) QueryRow(query string, args ...interface{}) *sql.Row {
-	return w.adapter.QueryRowContext(context.Background(), query, args...)
+	return w.adapter.QueryRow(context.Background(), query, args...)
 }
 
 // QueryRowContext 执行查询并返回单行结果
 func (w *FinalAdapterWrapper) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	return w.adapter.QueryRowContext(ctx, query, args...)
+	return w.adapter.QueryRow(ctx, query, args...)
 }
 
 // Exec 执行非查询操作
 func (w *FinalAdapterWrapper) Exec(query string, args ...interface{}) (sql.Result, error) {
-	return w.adapter.ExecContext(context.Background(), query, args...)
+	return w.adapter.Exec(context.Background(), query, args...)
 }
 
 // ExecContext 执行非查询操作
 func (w *FinalAdapterWrapper) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	return w.adapter.ExecContext(ctx, query, args...)
+	return w.adapter.Exec(ctx, query, args...)
 }
 
 // Prepare 准备SQL语句
@@ -90,19 +90,7 @@ func (w *FinalAdapterWrapper) Begin() (*sql.Tx, error) {
 
 // BeginTx 开始事务
 func (w *FinalAdapterWrapper) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	if txBeginner, ok := w.adapter.(interface{ BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error) }); ok {
-		return txBeginner.BeginTx(ctx, opts)
-	}
-	// 使用ExecuteInTransaction模式
-	var tx *sql.Tx
-	err := w.adapter.ExecuteInTransaction(ctx, func(sqlTx *sql.Tx) error {
-		tx = sqlTx
-		return nil // 事务会在ExecuteInTransaction中提交或回滚
-	})
-	if err != nil {
-		return nil, err
-	}
-	return tx, nil
+	return w.adapter.BeginTx(ctx, opts)
 }
 
 // SetMaxOpenConns 设置最大打开连接数

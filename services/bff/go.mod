@@ -80,7 +80,6 @@ require (
 )
 
 replace (
-	github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 	github.com/ScientificInternet/Google-Monetize/pkg/cache => ../../pkg/cache
 	github.com/ScientificInternet/Google-Monetize/pkg/errors => ../../pkg/errors
 	github.com/ScientificInternet/Google-Monetize/pkg/http => ../../pkg/http

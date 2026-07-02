@@ -22,7 +22,6 @@ import (
 	_ "github.com/lib/pq"
 	pcache "github.com/ScientificInternet/Google-Monetize/pkg/cache"
 	cfgpkg "github.com/ScientificInternet/Google-Monetize/pkg/config"
-	"github.com/ScientificInternet/Google-Monetize/pkg/auth"
 	"github.com/ScientificInternet/Google-Monetize/pkg/database"
 	"github.com/ScientificInternet/Google-Monetize/pkg/errorreporting"
 	"github.com/ScientificInternet/Google-Monetize/pkg/errors"
@@ -95,12 +94,6 @@ func main() {
 	// Omit Pub/Sub subscriber in minimal deployment; projections run via CFs in prod.
 	log.Println("Billing: skipping in-process Pub/Sub subscriber (use CFs in prod)")
 
-	// Initialize enhanced JWT and RBAC system
-	jwtManager, rbacManager, err := auth.NewEnhancedJWTAuth()
-	if err != nil {
-		log.Fatalf("Failed to initialize enhanced JWT auth: %v", err)
-	}
-	log.Println("Enhanced JWT and RBAC authentication system initialized")
 
 	// Initialize cache (Redis or in-memory fallback)
 	cache := pcache.NewFromEnv()
@@ -226,12 +219,10 @@ func main() {
 	// Initialize subscription config handler
 	configHandler := handlers.NewsubscriptionsConfigHandler(dbpool, cache, pub)
 
-	// Create enhanced JWT middleware
-	enhancedAuthMiddleware := auth.NewEnhancedJWTMiddleware(jwtManager)
 
 	// Custom non-OAS endpoints first (so they aren't shadowed), all behind enhanced auth
 	r.Group(func(rch chi.Router) {
-		rch.Use(enhancedAuthMiddleware.Authenticate)
+		rch.Use(middleware.AuthMiddleware)
 		rch.Get("/api/v1/billing/config", apiHandler.getBillingConfig)
 		rch.Get("/api/v1/billing/tokens/transactions/{id}", apiHandler.gettoken_transactionsByID)
 		rch.Get("/api/v1/billing/usage/report", apiHandler.getUsageReport)
@@ -285,7 +276,7 @@ func main() {
 
 	// Admin-only endpoints for consistency plan & repair
 	r.Group(func(adm chi.Router) {
-		adm.Use(enhancedAuthMiddleware.Authenticate)
+		adm.Use(middleware.AuthMiddleware)
 		adm.Use(middleware.AdminOnly)
 		adm.Get("/api/v1/billing/tokens/consistency/plan", apiHandler.getTokenConsistencyPlan)
 		adm.Post("/api/v1/billing/tokens/consistency/repair", apiHandler.postTokenConsistencyRepair)
@@ -304,7 +295,7 @@ func main() {
 		BaseURL: "/api/v1/billing",
 		Middlewares: []api.MiddlewareFunc{
 			func(next http.Handler) http.Handler { return middleware.IdempotencyMiddleware(next) },
-			func(next http.Handler) http.Handler { return enhancedAuthMiddleware.Authenticate(next) },
+			func(next http.Handler) http.Handler { return middleware.AuthMiddleware(next) },
 		},
 	})
 	r.Mount("/api/v1/billing", oapiHandler)

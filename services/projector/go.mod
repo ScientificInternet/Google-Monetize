@@ -16,7 +16,6 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/http => ../../pkg/http
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/httpclient => ../../pkg/httpclient
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/logger => ../../pkg/logger
 

@@ -14,7 +14,6 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/errors => ../../pkg/er
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/pagination => ../../pkg/pagination
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/logger => ../../pkg/logger
 

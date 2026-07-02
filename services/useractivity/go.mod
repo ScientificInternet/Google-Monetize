@@ -89,7 +89,6 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/logger => ../../pkg/lo
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/middleware => ../../pkg/middleware
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/telemetry => ../../pkg/telemetry
 

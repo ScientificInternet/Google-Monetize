@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ScientificInternet/Google-Monetize/pkg/auth"
 	"github.com/ScientificInternet/Google-Monetize/pkg/database"
 	"github.com/ScientificInternet/Google-Monetize/services/console/internal/config"
 	"github.com/ScientificInternet/Google-Monetize/services/console/internal/handlers"
@@ -84,12 +83,6 @@ func main() {
 	// This would typically involve a service account or a specific admin auth mechanism.
 	// authClient := auth.NewAdminClient(ctx)
 
-	// Initialize enhanced JWT and RBAC system
-	jwtManager, rbacManager, err := auth.NewEnhancedJWTAuth()
-	if err != nil {
-		log.Fatalf("Failed to initialize enhanced JWT auth: %v", err)
-	}
-	log.Println("Enhanced JWT and RBAC authentication system initialized")
 
 	// Initialize cache (Redis or in-memory fallback)
 	c := cache.NewFromEnv()

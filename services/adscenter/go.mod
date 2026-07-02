@@ -98,7 +98,6 @@ require (
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/apierrors => ../../pkg/apierrors
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/errors => ../../pkg/errors
 

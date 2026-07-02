@@ -23,7 +23,6 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/errors => ../../pkg/er
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/logger => ../../pkg/logger
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/httpclient => ../../pkg/httpclient
 

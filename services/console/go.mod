@@ -11,7 +11,6 @@ require (
 	github.com/oapi-codegen/runtime v1.1.2
 	github.com/stretchr/testify v1.11.1
 	github.com/ScientificInternet/Google-Monetize/pkg/apierrors v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/auth v0.0.1
 	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0
 	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/dburl v0.0.0-00010101000000-000000000000
@@ -101,7 +100,6 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/telemetry => ../../pkg
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/http => ../../pkg/http
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/logger => ../../pkg/logger
 

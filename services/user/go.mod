@@ -101,7 +101,6 @@ require (
 // Local package replacements - include all transitive dependencies
 replace github.com/ScientificInternet/Google-Monetize/pkg/apierrors => ../../pkg/apierrors
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/cache => ../../pkg/cache
 

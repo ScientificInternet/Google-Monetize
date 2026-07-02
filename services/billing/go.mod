@@ -19,7 +19,6 @@ require (
 	github.com/supabase-community/gotrue-go v1.2.1
 	github.com/supabase-community/supabase-go v0.0.4
 	github.com/ScientificInternet/Google-Monetize/pkg/apierrors v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/auth v0.0.1
 	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/config v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000
@@ -122,7 +121,6 @@ require (
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/apierrors => ../../pkg/apierrors
 
-replace github.com/ScientificInternet/Google-Monetize/pkg/auth => ../../pkg/auth
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/cache => ../../pkg/cache
 
