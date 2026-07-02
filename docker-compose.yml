@@ -9,17 +9,6 @@ services:
       - DATABASE_URL_SECRET_NAME=${DATABASE_URL_SECRET_NAME}
     depends_on:
       - cloudsql-proxy
-  billing:
-    build:
-      context: ./services/billing
-    ports:
-      - "8082:8080"
-    environment:
-      - DATABASE_URL_SECRET_NAME=${DATABASE_URL_SECRET_NAME}
-    depends_on:
-      - cloudsql-proxy
-    volumes:
-      - ./secrets/firebase-adminsdk.json:/app/secrets/firebase-adminsdk.json:ro
   offer:
     build:
       context: ./services/offer

@@ -28,13 +28,11 @@ use (
 	./services/aicore
 	./services/adscenter
 	./services/bff
-	./services/billing
 	./services/console
 	./services/gateway-middleware
 	./services/projector
 	./services/recommendations
 	./services/siterank
-	./services/user
 	./services/useractivity
 )
 
