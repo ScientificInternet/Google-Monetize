@@ -25,6 +25,7 @@ use (
 	./pkg/serviceclient
 	./pkg/supabaseauth
 	./pkg/telemetry
+	./services/aicore
 	./services/adscenter
 	./services/batchopen
 	./services/bff
