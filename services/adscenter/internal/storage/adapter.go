@@ -235,17 +235,7 @@ func (a *AdsCenterAdapter) EnsureTablesExist(ctx context.Context) error {
 	}
 
 	for _, ddl := range ddlStatements {
-		// 先进行dry run验证
-		if a.dbAdmin != nil {
-			result, err := a.dbAdmin.ExecuteDDL(ctx, "adscenter", ddl, true)
-			if err != nil {
-				log.Printf("Warning: DDL validation failed (db-admin may not support DDL execution): %v", err)
-				// 继续执行，可能只是db-admin服务版本限制
-			} else if !result.Success {
-				log.Printf("Warning: DDL validation returned failure: %s", ddl)
-				continue
-			}
-		}
+		// DDL 由 db-admin 独立执行(服务运行时不执行 DDL);此处仅登记
 
 		log.Printf("DDL statement validated: %s", ddl[:min(len(ddl), 50)]+"...")
 	}
@@ -269,9 +259,8 @@ func (a *AdsCenterAdapter) GetAdapterStatus(ctx context.Context) (*AdapterStatus
 
 	// 获取db-admin状态
 	if a.dbAdmin != nil {
-		if dbStatus, err := a.dbAdmin.GetDatabaseStatus(ctx, "adscenter"); err == nil {
+		if err := a.dbAdmin.Ping(ctx); err == nil {
 			status.DBAdminStatus = "connected"
-			status.DBAdminVersion = fmt.Sprintf("Database: %s, Status: %s", dbStatus.Database, dbStatus.Status)
 		} else {
 			status.DBAdminStatus = "disconnected"
 			status.DBAdminError = err.Error()
