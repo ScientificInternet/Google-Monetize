@@ -1270,38 +1270,6 @@ func (s *Server) getAliases(seedDomain, landingURL string) []string {
 }
 
 func fetchLandingSignals(u string, timeout time.Duration) []string {
-	// Try browser-exec page-signals first using serviceclient
-	if serviceRegistry != nil {
-		var out struct {
-			Title    string `json:"title"`
-			SiteName string `json:"siteName"`
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-
-		err := serviceRegistry.CallJSON(ctx, "browser-exec", serviceclient.Request{
-			Method: http.MethodPost,
-			Path:   "/api/v1/browser/page-signals",
-			Body: map[string]interface{}{
-				"url":       u,
-				"timeoutMs": int(timeout / time.Millisecond),
-			},
-		}, &out)
-
-		if err == nil {
-			arr := make([]string, 0, 2)
-			if strings.TrimSpace(out.Title) != "" {
-				arr = append(arr, out.Title)
-			}
-			if strings.TrimSpace(out.SiteName) != "" {
-				arr = append(arr, out.SiteName)
-			}
-			if len(arr) > 0 {
-				return arr
-			}
-		}
-	}
 	// naive HTML fetcher: title and og:site_name
 	// safe-guard: only http/https
 	if pu, err := url.Parse(u); err != nil || (pu.Scheme != "http" && pu.Scheme != "https") {
