@@ -31,13 +31,13 @@ replace github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth => ../../
 	github.com/oapi-codegen/runtime v1.1.2
 	github.com/redis/go-redis/v9 v9.7.0
 	github.com/ScientificInternet/Google-Monetize/pkg/auth v0.0.1
-	github.com/ScientificInternet/Google-Monetize/pkg/config v0.0.0-20250921095352-ef8078c06b83
+	github.com/ScientificInternet/Google-Monetize/pkg/config v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.1
 	github.com/ScientificInternet/Google-Monetize/pkg/events v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/httpclient v0.0.1
 	github.com/ScientificInternet/Google-Monetize/pkg/http v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.1
-	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.0-20250921095352-ef8078c06b83
+	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/eventstore v0.0.0-00010101000000-000000000000
 )
@@ -66,7 +66,7 @@ require (
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/idempotency v0.0.0-20250925113750-f38a0734af10 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/idempotency v0.0.0-00010101000000-000000000000 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
@@ -89,3 +89,5 @@ require (
 	google.golang.org/protobuf v1.36.7 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/config => ../../../pkg/config

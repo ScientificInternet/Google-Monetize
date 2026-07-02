@@ -47,7 +47,7 @@ require (
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/sony/gobreaker v1.0.0 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-20251023180739-8980a6305652 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.1 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/http v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/httpclient v0.0.1 // indirect
@@ -93,3 +93,5 @@ replace (
 )
 
 replace github.com/ScientificInternet/Google-Monetize/pkg/serviceclient => ../../pkg/serviceclient
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/database => ../../pkg/database

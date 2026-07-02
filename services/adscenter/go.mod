@@ -13,7 +13,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sony/gobreaker v1.0.0
 	github.com/stretchr/testify v1.11.1
-	github.com/ScientificInternet/Google-Monetize/pkg/apierrors v0.0.0-20251012115218-bdfed97caabc
+	github.com/ScientificInternet/Google-Monetize/pkg/apierrors v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0
 	github.com/ScientificInternet/Google-Monetize/pkg/circuitbreaker v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/config v0.0.0-00010101000000-000000000000

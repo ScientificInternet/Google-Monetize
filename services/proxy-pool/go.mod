@@ -55,7 +55,7 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0-00010101000000-000000000000 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-20251024001746-c36c54440544 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.1 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/http v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/httpclient v0.0.0 // indirect
@@ -82,3 +82,5 @@ require (
 	google.golang.org/grpc v1.75.1 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 )
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/database => ../../pkg/database
