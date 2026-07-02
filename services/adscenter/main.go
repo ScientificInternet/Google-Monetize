@@ -7,11 +7,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/ScientificInternet/Google-Monetize/pkg/database"
 	"github.com/ScientificInternet/Google-Monetize/pkg/telemetry"
 	adsconfig "github.com/ScientificInternet/Google-Monetize/services/adscenter/internal/config"
 	"github.com/ScientificInternet/Google-Monetize/services/adscenter/internal/migrations"
 	"github.com/ScientificInternet/Google-Monetize/services/adscenter/internal/server"
-	"github.com/ScientificInternet/Google-Monetize/services/adscenter/internal/storage"
 )
 
 func main() {
