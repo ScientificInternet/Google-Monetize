@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/ScientificInternet/Google-Monetize/pkg/database"
 	pcache "github.com/ScientificInternet/Google-Monetize/pkg/cache"
 	apperr "github.com/ScientificInternet/Google-Monetize/pkg/errors"
 	"github.com/ScientificInternet/Google-Monetize/pkg/middleware"
@@ -41,7 +42,7 @@ type Server struct {
 func (s *Server) GetDB() *sql.DB {
 	// This method provides compatibility for existing code
 	// New code should use s.Adapter directly
-	if adapter, ok := s.Adapter.(*database.FinalAdapter); ok {
+	if _, ok := s.Adapter.(*database.FinalAdapter); ok {
 		// FinalAdapter doesn't support direct *sql.DB access
 		panic("FinalAdapter does not support direct *sql.DB access. Use Adapter methods instead.")
 	}
@@ -183,7 +184,7 @@ func (s *Server) setupRouter() {
 	r.Handle("/metrics", telemetry.MetricsHandler())
 
 	// Register API routes from internal/api package
-	apihandlers.RegisterRoutes(r, s.db, s.cache)
+	apihandlers.RegisterRoutes(r, s.GetDB(), s.cache)
 
 	// Mount OpenAPI generated handlers
 	s.mountOpenAPIHandlers(r)
@@ -202,7 +203,7 @@ func (s *Server) readinessHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Check database connectivity
-	if err := s.db.PingContext(ctx); err != nil {
+	if err := s.GetDB().PingContext(ctx); err != nil {
 		apperr.Write(w, r, http.StatusInternalServerError, "NOT_READY",
 			"dependencies not ready", map[string]string{"db": err.Error()})
 		return
@@ -225,7 +226,7 @@ func (s *Server) readinessHandler(w http.ResponseWriter, r *http.Request) {
 // mountOpenAPIHandlers mounts the OpenAPI generated handlers
 func (s *Server) mountOpenAPIHandlers(r chi.Router) {
 	// Create OpenAPI implementation
-	oas := apihandlers.NewOASImpl(s.db, s.cache)
+	oas := apihandlers.NewOASImpl(s.GetDB(), s.cache)
 
 	// Mount OpenAPI handler with middleware
 	oapiHandler := api.HandlerWithOptions(oas, api.ChiServerOptions{
@@ -296,8 +297,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	// Close database connection
-	if s.db != nil {
-		if err := s.db.Close(); err != nil {
+	if db := s.GetDB(); db != nil {
+		if err := db.Close(); err != nil {
 			log.Printf("Error closing database: %v", err)
 		}
 	}
@@ -308,7 +309,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // DB returns the database connection
 func (s *Server) DB() *sql.DB {
-	return s.db
+	return s.GetDB()
 }
 
 // Cache returns the cache instance
