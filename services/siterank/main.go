@@ -13,7 +13,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
-		"github.com/ScientificInternet/Google-Monetize/pkg/dburl"
 	"github.com/ScientificInternet/Google-Monetize/pkg/logger"
 	"github.com/ScientificInternet/Google-Monetize/services/siterank/internal/db"
 	"github.com/ScientificInternet/Google-Monetize/pkg/middleware"
@@ -29,7 +28,7 @@ import (
 )
 
 var (
-	db     *sql.DB
+	sqlDB  *sql.DB
 	ctx    = context.Background()
 	zlog   = logger.Get()
 	stdlog = log.New(os.Stderr, "[siterank] ", log.LstdFlags)
@@ -56,10 +55,10 @@ func main() {
 	defer finalAdapterWrapper.Close()
 
 	// Create a sql.DB compatible interface
-	db = finalAdapterWrapper
+	sqlDB = finalAdapterWrapper.GetAdapter().GetSupabaseDB()
 
 	stdlog.Println("Pinging FinalAdapter...")
-	err = db.Ping(ctx)
+	err = finalAdapterWrapper.Ping(ctx)
 	if err != nil {
 		stdlog.Fatalf("Error pinging FinalAdapter at startup: %v", err)
 	}
@@ -131,7 +130,7 @@ func main() {
 	stdlog.Println("AI evaluator created successfully")
 
 	// Evaluation service - pass FinalAdapter to evaluation service
-	evalService := evaluation.NewService(adapter, browserExecClient, similarwebClient, aiEval, publisher)
+	evalService := evaluation.NewService(sqlDB, browserExecClient, similarwebClient, aiEval, publisher)
 
 	// Handlers (pure execution - no billing dependencies)
 	evalHandler := handlers.NewEvaluationHandler(evalService, publisher)
@@ -139,7 +138,7 @@ func main() {
 
 	// Initialize the Pub/Sub subscriber with all dependencies
 	stdlog.Println("Creating event subscriber...")
-	subscriber, err := events.NewSubscriber(ctx, db, publisher, evalService, nil)
+	subscriber, err := events.NewSubscriber(ctx, sqlDB, publisher, evalService, nil)
 	if err != nil {
 		// Pub/Sub subscriber is optional - service can run without it
 		stdlog.Printf("WARN: Failed to create event subscriber (continuing without it): %v", err)
@@ -164,7 +163,7 @@ func main() {
 	// Test routes (no authentication required) - only in non-production
 	env := os.Getenv("ENV")
 	if env != "production" {
-		testHandler := handlers.NewTestHandler(evalService, adapter)
+		testHandler := handlers.NewTestHandler(evalService, sqlDB)
 		router.Route("/api/test", func(r chi.Router) {
 			r.Post("/evaluate", testHandler.TestEvaluate)
 			r.Get("/evaluations/{evaluationId}", testHandler.GetEvaluation)
@@ -202,7 +201,7 @@ func main() {
 }
 
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	err := db.Ping()
+	err := sqlDB.Ping()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Health check failed: Database error: %v\n", err)
