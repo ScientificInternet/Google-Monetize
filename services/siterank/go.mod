@@ -50,15 +50,15 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.14.0
 	github.com/stretchr/testify v1.11.1
-	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0
+	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/dbadmin v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/dburl v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.1
-	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.1
+	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.0-00010101000000-000000000000
+	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/serviceclient v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth v0.0.1
-	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0
+	github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth v0.0.0-00010101000000-000000000000
+	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0-00010101000000-000000000000
 	golang.org/x/time v0.13.0
 )
 
@@ -99,10 +99,10 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/sony/gobreaker v1.0.0 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.1 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/http v0.0.0-00010101000000-000000000000 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/httpclient v0.0.1 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/idempotency v0.0.0 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/httpclient v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/idempotency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect

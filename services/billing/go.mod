@@ -24,11 +24,11 @@ require (
 	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/dburl v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/errorreporting v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.1
+	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/events v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.1
+	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/metrics v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.1
+	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0-00010101000000-000000000000
 )
 

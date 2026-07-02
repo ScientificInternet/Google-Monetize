@@ -11,9 +11,9 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.14.0
 	github.com/stretchr/testify v1.11.1
-	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.1
+	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/serviceclient v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0
+	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -96,3 +96,9 @@ replace (
 	github.com/ScientificInternet/Google-Monetize/pkg/serviceclient => ../../pkg/serviceclient
 	github.com/ScientificInternet/Google-Monetize/pkg/telemetry => ../../pkg/telemetry
 )
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/logger => ../../pkg/logger
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/serviceclient => ../../pkg/serviceclient
+
+replace github.com/ScientificInternet/Google-Monetize/pkg/telemetry => ../../pkg/telemetry

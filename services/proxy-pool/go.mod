@@ -55,12 +55,12 @@ require (
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/cache v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.1 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ScientificInternet/Google-Monetize/pkg/http v0.0.0-00010101000000-000000000000 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/httpclient v0.0.0 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/idempotency v0.0.0 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.1 // indirect
-	github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth v0.0.1 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/httpclient v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/idempotency v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth v0.0.0-00010101000000-000000000000 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect

@@ -11,9 +11,9 @@ require (
 	github.com/redis/go-redis/v9 v9.14.0
 	github.com/ScientificInternet/Google-Monetize/pkg/apierrors v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/database v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.1
+	github.com/ScientificInternet/Google-Monetize/pkg/logger v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth v0.0.1
+	github.com/ScientificInternet/Google-Monetize/pkg/supabaseauth v0.0.0-00010101000000-000000000000
 	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0-00010101000000-000000000000
 	golang.org/x/oauth2 v0.31.0
 )

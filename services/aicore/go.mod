@@ -5,9 +5,9 @@ go 1.25.1
 require (
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/ScientificInternet/Google-Monetize/pkg/errorreporting v0.0.0-00010101000000-000000000000
-	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.1
-	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.1
-	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0
+	github.com/ScientificInternet/Google-Monetize/pkg/errors v0.0.0-00010101000000-000000000000
+	github.com/ScientificInternet/Google-Monetize/pkg/middleware v0.0.0-00010101000000-000000000000
+	github.com/ScientificInternet/Google-Monetize/pkg/telemetry v0.0.0-00010101000000-000000000000
 )
 
 // 本地 pkg 模块的 replace(覆盖传递依赖;replace 不传递,故列全,多余的无害)。
