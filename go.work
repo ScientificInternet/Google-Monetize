@@ -27,7 +27,6 @@ use (
 	./pkg/telemetry
 	./services/aicore
 	./services/adscenter
-	./services/batchopen
 	./services/bff
 	./services/billing
 	./services/console
